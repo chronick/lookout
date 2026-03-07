@@ -1,4 +1,4 @@
-module github.com/chronick/lookout-go
+module github.com/chronick/lookout
 
 go 1.24.0
 

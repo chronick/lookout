@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"sort"
 
-	"github.com/chronick/lookout-go/internal/store"
+	"github.com/chronick/lookout/internal/store"
 	metricspb "go.opentelemetry.io/proto/otlp/metrics/v1"
 	commonpb "go.opentelemetry.io/proto/otlp/common/v1"
 )

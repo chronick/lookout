@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/chronick/lookout-go/internal/store"
+	"github.com/chronick/lookout/internal/store"
 )
 
 // FormatSpans writes spans in the specified format.

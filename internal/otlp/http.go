@@ -10,8 +10,8 @@ import (
 
 	"google.golang.org/protobuf/proto"
 
-	"github.com/chronick/lookout-go/internal/ai"
-	"github.com/chronick/lookout-go/internal/store"
+	"github.com/chronick/lookout/internal/ai"
+	"github.com/chronick/lookout/internal/store"
 	collectorpb "go.opentelemetry.io/proto/otlp/collector/trace/v1"
 	metricscollectorpb "go.opentelemetry.io/proto/otlp/collector/metrics/v1"
 )

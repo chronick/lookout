@@ -12,8 +12,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/chronick/lookout-go/internal/store"
-	"github.com/chronick/lookout-go/internal/web"
+	"github.com/chronick/lookout/internal/store"
+	"github.com/chronick/lookout/internal/web"
 )
 
 // Server is the analytics HTTP API server.

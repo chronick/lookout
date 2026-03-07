@@ -11,11 +11,11 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/chronick/lookout-go/internal/api"
-	"github.com/chronick/lookout-go/internal/cli"
-	"github.com/chronick/lookout-go/internal/config"
-	"github.com/chronick/lookout-go/internal/otlp"
-	"github.com/chronick/lookout-go/internal/store"
+	"github.com/chronick/lookout/internal/api"
+	"github.com/chronick/lookout/internal/cli"
+	"github.com/chronick/lookout/internal/config"
+	"github.com/chronick/lookout/internal/otlp"
+	"github.com/chronick/lookout/internal/store"
 )
 
 func main() {
@@ -45,10 +45,10 @@ func main() {
 }
 
 func printUsage() {
-	fmt.Println(`lookout-go — OTEL trace collector for AI workflows
+	fmt.Println(`lookout — OTEL trace collector for AI workflows
 
 Usage:
-  lookout-go <command> [flags]
+  lookout <command> [flags]
 
 Commands:
   serve     Start the collector daemon
@@ -56,7 +56,7 @@ Commands:
   mcp       Start MCP server (stdio)
   dash      Launch TUI dashboard
 
-Run "lookout-go <command> --help" for details.`)
+Run "lookout <command> --help" for details.`)
 }
 
 func cmdServe(args []string) {
@@ -101,7 +101,7 @@ func cmdServe(args []string) {
 		log.Fatalf("start api: %v", err)
 	}
 
-	log.Printf("lookout-go running — OTLP HTTP %s, API %s, DB %s", cfg.HTTPAddr, cfg.APIAddr, cfg.DBPath)
+	log.Printf("lookout running — OTLP HTTP %s, API %s, DB %s", cfg.HTTPAddr, cfg.APIAddr, cfg.DBPath)
 
 	// Start retention cleanup loop
 	go retentionLoop(sqlStore, cfg.RetentionDays)
@@ -133,7 +133,7 @@ func retentionLoop(s *store.SQLiteStore, retentionDays int) {
 
 func cmdQuery(args []string) {
 	if len(args) == 0 {
-		fmt.Println(`Usage: lookout-go query <subcommand> [flags]
+		fmt.Println(`Usage: lookout query <subcommand> [flags]
 
 Subcommands:
   traces      Query trace spans
