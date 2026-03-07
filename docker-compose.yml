@@ -1,0 +1,25 @@
+version: '3.8'
+
+services:
+  lookout:
+    build: .
+    container_name: lookout
+    ports:
+      - "4318:4318"  # OTLP HTTP receiver
+      - "4320:4320"  # Analytics API + Web UI
+    environment:
+      LOOKOUT_DB_PATH: /data/lookout.db
+      LOOKOUT_HTTP_ADDR: 0.0.0.0:4318
+      LOOKOUT_API_ADDR: 0.0.0.0:4320
+      LOOKOUT_RETENTION_DAYS: 7
+    volumes:
+      - lookout-data:/data
+    healthcheck:
+      test: ["CMD", "lookout", "query", "stats"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+      start_period: 5s
+
+volumes:
+  lookout-data:
