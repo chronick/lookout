@@ -51,6 +51,7 @@ templ layout(title string, currentPage string) {
 					<li><a href="/" if currentPage == "dashboard" { class="active" }>Dashboard</a></li>
 					<li><a href="/traces" if currentPage == "traces" { class="active" }>Traces</a></li>
 					<li><a href="/sessions" if currentPage == "sessions" { class="active" }>Sessions</a></li>
+					<li><a href="/metrics" if currentPage == "metrics" { class="active" }>Metrics</a></li>
 					<li><a href="/anomalies" if currentPage == "anomalies" { class="active" }>Anomalies</a></li>
 				</ul>
 			</nav>

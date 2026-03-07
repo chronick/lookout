@@ -25,6 +25,7 @@ func (h *Handler) Register(mux *http.ServeMux) {
 	mux.HandleFunc("GET /traces/{traceID}", h.handleTraceDetail)
 	mux.HandleFunc("GET /sessions", h.handleSessions)
 	mux.HandleFunc("GET /sessions/{sessionID}", h.handleSessionDetail)
+	mux.HandleFunc("GET /metrics", h.handleMetrics)
 	mux.HandleFunc("GET /anomalies", h.handleAnomalies)
 
 	// Partials for htmx polling
@@ -120,6 +121,46 @@ func (h *Handler) handleSessionDetail(w http.ResponseWriter, r *http.Request) {
 	}
 
 	sessionDetailPage(sessionID, spans).Render(ctx, w)
+}
+
+func (h *Handler) handleMetrics(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+
+	names, err := h.store.ListMetricNames(ctx)
+	if err != nil {
+		http.Error(w, err.Error(), 500)
+		return
+	}
+
+	data := MetricsPageData{
+		Names:  names,
+		Bucket: r.URL.Query().Get("bucket"),
+	}
+	if data.Bucket == "" {
+		data.Bucket = "1m"
+	}
+
+	data.Current = r.URL.Query().Get("name")
+	if data.Current == "" && len(names) > 0 {
+		data.Current = names[0]
+	}
+
+	if data.Current != "" {
+		filter := store.MetricFilter{
+			Name: data.Current,
+		}
+		switch data.Bucket {
+		case "1h":
+			filter.BucketWidth = 3600
+		case "1d":
+			filter.BucketWidth = 86400
+		default:
+			filter.BucketWidth = 60
+		}
+		data.Rollups, _ = h.store.QueryMetricRollups(ctx, filter)
+	}
+
+	metricsPage(data).Render(ctx, w)
 }
 
 func (h *Handler) handleAnomalies(w http.ResponseWriter, r *http.Request) {

@@ -3,3 +3,6 @@ lookout-seed
 *.db
 *.db-wal
 *.db-shm
+
+# bv (beads viewer) local config and caches
+.bv/

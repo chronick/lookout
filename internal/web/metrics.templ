@@ -1,0 +1,110 @@
+package web
+
+import (
+	"fmt"
+	"time"
+
+	"github.com/chronick/lookout-go/internal/store"
+)
+
+type MetricsPageData struct {
+	Names   []string
+	Current string
+	Bucket  string
+	Rollups []store.MetricRollup
+}
+
+templ metricsPage(data MetricsPageData) {
+	@layout("Metrics", "metrics") {
+		<hgroup>
+			<h2>Metrics</h2>
+			<p>OTLP metric rollups aggregated by time bucket</p>
+		</hgroup>
+		if len(data.Names) == 0 {
+			<p><em>No metrics collected yet</em></p>
+		} else {
+			<form hx-get="/metrics" hx-target="main" hx-select="main > *" hx-swap="innerHTML" hx-push-url="true">
+				<div class="grid">
+					<label>
+						Metric
+						<select name="name">
+							for _, n := range data.Names {
+								<option value={ n } if n == data.Current { selected }>{ n }</option>
+							}
+						</select>
+					</label>
+					<label>
+						Bucket
+						<select name="bucket">
+							<option value="1m" if data.Bucket == "1m" { selected }>1 minute</option>
+							<option value="1h" if data.Bucket == "1h" { selected }>1 hour</option>
+							<option value="1d" if data.Bucket == "1d" { selected }>1 day</option>
+						</select>
+					</label>
+					<label>
+						&nbsp;
+						<button type="submit">View</button>
+					</label>
+				</div>
+			</form>
+			if data.Current != "" {
+				@metricRollupsTable(data.Rollups)
+			}
+		}
+	}
+}
+
+templ metricRollupsTable(rollups []store.MetricRollup) {
+	<figure>
+		<table>
+			<thead>
+				<tr>
+					<th>Time</th>
+					<th>Type</th>
+					<th>Labels</th>
+					<th>Count</th>
+					<th>Sum</th>
+					<th>Min</th>
+					<th>Max</th>
+					<th>Last</th>
+				</tr>
+			</thead>
+			<tbody>
+				if len(rollups) == 0 {
+					<tr><td colspan="8"><em>No rollups for this metric</em></td></tr>
+				}
+				for _, r := range rollups {
+					<tr>
+						<td class="mono">{ formatBucketTime(r.BucketStart) }</td>
+						<td>{ r.MetricType }</td>
+						<td class="mono truncate">{ formatLabels(r.LabelsJSON) }</td>
+						<td>{ fmt.Sprintf("%d", r.Count) }</td>
+						<td>{ formatMetricVal(r.Sum) }</td>
+						<td>{ formatMetricVal(r.Min) }</td>
+						<td>{ formatMetricVal(r.Max) }</td>
+						<td>{ formatMetricVal(r.Last) }</td>
+					</tr>
+				}
+			</tbody>
+		</table>
+	</figure>
+}
+
+func formatBucketTime(unix int64) string {
+	t := time.Unix(unix, 0)
+	return t.Format("Jan 02 15:04")
+}
+
+func formatLabels(labelsJSON string) string {
+	if labelsJSON == "{}" || labelsJSON == "" {
+		return "-"
+	}
+	return labelsJSON
+}
+
+func formatMetricVal(v float64) string {
+	if v == float64(int64(v)) {
+		return fmt.Sprintf("%.0f", v)
+	}
+	return fmt.Sprintf("%.2f", v)
+}
