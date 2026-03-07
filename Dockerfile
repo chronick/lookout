@@ -19,7 +19,7 @@ RUN CGO_ENABLED=0 GOOS=linux GOARCH=${TARGETARCH} \
     -o lookout ./cmd/lookout
 
 # Runtime image — minimal Alpine
-FROM alpine:3.19
+FROM alpine:3.21
 
 LABEL org.opencontainers.image.title="Lookout" \
       org.opencontainers.image.description="OTEL trace collector for AI workflows" \
