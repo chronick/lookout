@@ -14,8 +14,12 @@ import (
 	"github.com/chronick/lookout/internal/api"
 	"github.com/chronick/lookout/internal/cli"
 	"github.com/chronick/lookout/internal/config"
+	mcpsrv "github.com/chronick/lookout/internal/mcp"
 	"github.com/chronick/lookout/internal/otlp"
 	"github.com/chronick/lookout/internal/store"
+	"github.com/chronick/lookout/internal/tui"
+	tea "github.com/charmbracelet/bubbletea"
+	"github.com/mark3labs/mcp-go/server"
 )
 
 func main() {
@@ -30,11 +34,9 @@ func main() {
 	case "query":
 		cmdQuery(os.Args[2:])
 	case "mcp":
-		fmt.Fprintln(os.Stderr, "MCP server not yet implemented")
-		os.Exit(1)
+		cmdMCP(os.Args[2:])
 	case "dash":
-		fmt.Fprintln(os.Stderr, "TUI dashboard not yet implemented")
-		os.Exit(1)
+		cmdDash(os.Args[2:])
 	case "help", "-h", "--help":
 		printUsage()
 	default:
@@ -90,10 +92,14 @@ func cmdServe(args []string) {
 	// Create API server
 	apiServer := api.NewServer(cfg.APIAddr, sqlStore, ring)
 
-	// Create OTLP HTTP receiver
+	// Create OTLP receivers
 	otlpHTTP := otlp.NewHTTPReceiver(cfg.HTTPAddr, sqlStore, ring, apiServer.BroadcastSpans)
+	otlpGRPC := otlp.NewGRPCReceiver(cfg.GRPCAddr, sqlStore, ring, apiServer.BroadcastSpans)
 
 	// Start servers
+	if err := otlpGRPC.Start(); err != nil {
+		log.Fatalf("start otlp grpc: %v", err)
+	}
 	if err := otlpHTTP.Start(); err != nil {
 		log.Fatalf("start otlp http: %v", err)
 	}
@@ -101,7 +107,7 @@ func cmdServe(args []string) {
 		log.Fatalf("start api: %v", err)
 	}
 
-	log.Printf("lookout running — OTLP HTTP %s, API %s, DB %s", cfg.HTTPAddr, cfg.APIAddr, cfg.DBPath)
+	log.Printf("lookout running — OTLP gRPC %s, OTLP HTTP %s, API %s, DB %s", cfg.GRPCAddr, cfg.HTTPAddr, cfg.APIAddr, cfg.DBPath)
 
 	// Start retention cleanup loop
 	go retentionLoop(sqlStore, cfg.RetentionDays)
@@ -114,6 +120,7 @@ func cmdServe(args []string) {
 	log.Println("shutting down...")
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
+	otlpGRPC.Stop()
 	otlpHTTP.Stop(ctx)
 	apiServer.Stop(ctx)
 }
@@ -128,6 +135,46 @@ func retentionLoop(s *store.SQLiteStore, retentionDays int) {
 		} else if n > 0 {
 			log.Printf("cleanup: deleted %d old spans", n)
 		}
+	}
+}
+
+func cmdDash(args []string) {
+	cfg := config.Default()
+	cfg.ApplyEnv()
+
+	fs := flag.NewFlagSet("dash", flag.ExitOnError)
+	fs.StringVar(&cfg.DBPath, "db-path", cfg.DBPath, "SQLite database path")
+	fs.Parse(args)
+
+	sqlStore, err := store.NewSQLiteStore(cfg.DBPath)
+	if err != nil {
+		log.Fatalf("open store: %v", err)
+	}
+	defer sqlStore.Close()
+
+	p := tea.NewProgram(tui.New(sqlStore), tea.WithAltScreen())
+	if _, err := p.Run(); err != nil {
+		log.Fatalf("tui: %v", err)
+	}
+}
+
+func cmdMCP(args []string) {
+	cfg := config.Default()
+	cfg.ApplyEnv()
+
+	fs := flag.NewFlagSet("mcp", flag.ExitOnError)
+	fs.StringVar(&cfg.DBPath, "db-path", cfg.DBPath, "SQLite database path")
+	fs.Parse(args)
+
+	sqlStore, err := store.NewSQLiteStore(cfg.DBPath)
+	if err != nil {
+		log.Fatalf("open store: %v", err)
+	}
+	defer sqlStore.Close()
+
+	srv := mcpsrv.NewServer(sqlStore)
+	if err := server.ServeStdio(srv); err != nil {
+		log.Fatalf("mcp server: %v", err)
 	}
 }
 

@@ -19,13 +19,15 @@ bin/lookout serve                         # start collector
 bin/lookout query traces --limit 5        # query recent spans
 bin/lookout query stats                   # aggregate stats
 bin/lookout query sessions                # agent sessions
+bin/lookout mcp                           # start MCP server (stdio)
+bin/lookout dash                          # launch TUI dashboard
 bin/seed --sessions 5 --traces 10         # seed test data
 ```
 
 ## Layout
 
 ```
-cmd/lookout/main.go              # CLI entry point (serve, query)
+cmd/lookout/main.go              # CLI entry point (serve, query, mcp)
 cmd/seed/main.go                 # Test data generator (OTLP sender)
 internal/
   config/config.go               # Shared configuration struct
@@ -46,6 +48,10 @@ internal/
     sessions.templ               # Sessions list + session detail
     anomalies.templ              # Anomalies page
     components.templ             # Shared components (span table, badges)
+  mcp/
+    server.go                    # MCP server (stdio) — tools + resources
+  tui/
+    tui.go                       # TUI dashboard (bubbletea + lipgloss)
   ai/
     semantic.go                  # GenAI semantic convention constants
     pricing.go                   # Model pricing table
@@ -77,6 +83,9 @@ internal/
 - google.golang.org/protobuf — protobuf runtime
 - modernc.org/sqlite — pure-Go SQLite (no CGO)
 - github.com/a-h/templ — type-safe HTML templates (run `templ generate` after editing .templ files)
+- github.com/mark3labs/mcp-go — MCP protocol server (stdio)
+- github.com/charmbracelet/bubbletea — TUI framework
+- github.com/charmbracelet/lipgloss — TUI styling
 - nhooyr.io/websocket — WebSocket support
 
 <!-- br-agent-instructions-v1 -->
