@@ -1,5 +1,4 @@
-lookout-go
-lookout-seed
+bin/
 *.db
 *.db-wal
 *.db-shm

@@ -12,14 +12,14 @@ spans with cost calculation, token throughput, and anomaly detection.
 
 ```bash
 templ generate ./internal/web/           # generate templ -> Go (run after editing .templ files)
-go build -o lookout-go ./cmd/lookout     # build
-go build -o lookout-seed ./cmd/seed      # build seed script
+go build -o bin/lookout ./cmd/lookout    # build
+go build -o bin/seed ./cmd/seed          # build seed script
 go test ./...                             # test all
-./lookout-go serve                        # start collector
-./lookout-go query traces --limit 5       # query recent spans
-./lookout-go query stats                  # aggregate stats
-./lookout-go query sessions               # agent sessions
-./lookout-seed --sessions 5 --traces 10   # seed test data
+bin/lookout serve                         # start collector
+bin/lookout query traces --limit 5        # query recent spans
+bin/lookout query stats                   # aggregate stats
+bin/lookout query sessions                # agent sessions
+bin/seed --sessions 5 --traces 10         # seed test data
 ```
 
 ## Layout

@@ -4,6 +4,4 @@
 docs
 .vscode
 *.md
-test-build
-lookout-go
-lookout-seed
+bin/
