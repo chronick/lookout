@@ -2,7 +2,7 @@ package store
 
 import "context"
 
-// Store is the main storage interface for lookout-go.
+// Store is the main storage interface for lookout.
 type Store interface {
 	// Spans
 	InsertSpans(ctx context.Context, spans []SpanRecord) error
