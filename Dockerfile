@@ -12,8 +12,9 @@ RUN go mod download
 
 COPY . .
 
-# Build binary as 'lookout' (not lookout-go)
-RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
+# Build binary — TARGETARCH is set by buildx for multi-platform builds
+ARG TARGETARCH
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=${TARGETARCH} \
     go build -ldflags="-s -w" \
     -o lookout ./cmd/lookout
 

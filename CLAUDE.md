@@ -74,7 +74,7 @@ internal/
 - Sessions: grouped by agent.session_id only
 - Zero-config: sensible defaults, all options via CLI flags or env vars
 - Retention: automatic cleanup of spans older than N days
-- Web UI: templ + htmx on :4320/ui/ — pico.css dark theme, htmx polling for live updates
+- Web UI: templ + htmx on :4320/ — pico.css dark theme, htmx polling for live updates
 - Proto: uses go.opentelemetry.io/proto/otlp package (no codegen)
 
 ## Dependencies
