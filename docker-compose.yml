@@ -5,6 +5,7 @@ services:
     build: .
     container_name: lookout
     ports:
+      - "4317:4317"  # OTLP gRPC receiver
       - "4318:4318"  # OTLP HTTP receiver
       - "4320:4320"  # Analytics API + Web UI
     environment:

@@ -39,12 +39,14 @@ HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
     CMD lookout query stats >/dev/null 2>&1 || exit 1
 
 # Expose ports
+# 4317 — OTLP gRPC receiver
 # 4318 — OTLP HTTP receiver (traces + metrics)
 # 4320 — Analytics API + Web UI
-EXPOSE 4318 4320
+EXPOSE 4317 4318 4320
 
 # Default to serve mode
 ENV LOOKOUT_DB_PATH=/data/lookout.db \
+    LOOKOUT_GRPC_ADDR=0.0.0.0:4317 \
     LOOKOUT_HTTP_ADDR=0.0.0.0:4318 \
     LOOKOUT_API_ADDR=0.0.0.0:4320
 
