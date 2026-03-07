@@ -1,0 +1,4 @@
+lookout-go
+*.db
+*.db-wal
+*.db-shm
