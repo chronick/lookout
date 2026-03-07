@@ -1,0 +1,584 @@
+package store
+
+import (
+	"context"
+	"database/sql"
+	"encoding/json"
+	"fmt"
+	"strings"
+	"time"
+
+	_ "modernc.org/sqlite"
+)
+
+// SQLiteStore implements Store using modernc.org/sqlite.
+type SQLiteStore struct {
+	db *sql.DB
+}
+
+// NewSQLiteStore opens or creates a SQLite database at the given path.
+func NewSQLiteStore(dbPath string) (*SQLiteStore, error) {
+	db, err := sql.Open("sqlite", dbPath+"?_journal_mode=WAL&_busy_timeout=5000&_synchronous=NORMAL")
+	if err != nil {
+		return nil, fmt.Errorf("open sqlite: %w", err)
+	}
+	db.SetMaxOpenConns(1)
+
+	s := &SQLiteStore{db: db}
+	if err := s.migrate(); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("migrate: %w", err)
+	}
+	return s, nil
+}
+
+func (s *SQLiteStore) migrate() error {
+	_, err := s.db.Exec(`
+		CREATE TABLE IF NOT EXISTS spans (
+			trace_id          TEXT NOT NULL,
+			span_id           TEXT NOT NULL PRIMARY KEY,
+			parent_span_id    TEXT NOT NULL DEFAULT '',
+			name              TEXT NOT NULL,
+			kind              INTEGER NOT NULL DEFAULT 0,
+			start_time_unix_nano INTEGER NOT NULL,
+			end_time_unix_nano   INTEGER NOT NULL,
+			attributes_json   TEXT NOT NULL DEFAULT '{}',
+			resource_json     TEXT NOT NULL DEFAULT '{}',
+			status_code       INTEGER NOT NULL DEFAULT 0,
+			status_message    TEXT NOT NULL DEFAULT '',
+			ai_system         TEXT NOT NULL DEFAULT '',
+			ai_model          TEXT NOT NULL DEFAULT '',
+			ai_input_tokens   INTEGER NOT NULL DEFAULT 0,
+			ai_output_tokens  INTEGER NOT NULL DEFAULT 0,
+			agent_name        TEXT NOT NULL DEFAULT '',
+			agent_task_id     TEXT NOT NULL DEFAULT '',
+			agent_session_id  TEXT NOT NULL DEFAULT '',
+			cost_usd          REAL NOT NULL DEFAULT 0,
+			tokens_per_sec    REAL NOT NULL DEFAULT 0,
+			anomaly           TEXT NOT NULL DEFAULT '',
+			inserted_at       TEXT NOT NULL DEFAULT (datetime('now'))
+		);
+
+		CREATE INDEX IF NOT EXISTS idx_spans_trace_id ON spans(trace_id);
+		CREATE INDEX IF NOT EXISTS idx_spans_start_time ON spans(start_time_unix_nano);
+		CREATE INDEX IF NOT EXISTS idx_spans_ai_model ON spans(ai_model);
+		CREATE INDEX IF NOT EXISTS idx_spans_agent_name ON spans(agent_name);
+		CREATE INDEX IF NOT EXISTS idx_spans_agent_session_id ON spans(agent_session_id);
+		CREATE INDEX IF NOT EXISTS idx_spans_status_code ON spans(status_code);
+		CREATE INDEX IF NOT EXISTS idx_spans_anomaly ON spans(anomaly) WHERE anomaly != '';
+
+		CREATE TABLE IF NOT EXISTS metric_rollups (
+			name         TEXT    NOT NULL,
+			labels_json  TEXT    NOT NULL DEFAULT '{}',
+			bucket_start INTEGER NOT NULL,
+			bucket_width INTEGER NOT NULL,
+			metric_type  TEXT    NOT NULL,
+			count        INTEGER NOT NULL DEFAULT 0,
+			sum          REAL    NOT NULL DEFAULT 0,
+			min          REAL    NOT NULL DEFAULT 0,
+			max          REAL    NOT NULL DEFAULT 0,
+			last         REAL    NOT NULL DEFAULT 0,
+			PRIMARY KEY (name, labels_json, bucket_start, bucket_width)
+		);
+	`)
+	return err
+}
+
+func (s *SQLiteStore) Close() error {
+	return s.db.Close()
+}
+
+func (s *SQLiteStore) InsertSpans(ctx context.Context, spans []SpanRecord) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	stmt, err := tx.PrepareContext(ctx, `
+		INSERT OR REPLACE INTO spans (
+			trace_id, span_id, parent_span_id, name, kind,
+			start_time_unix_nano, end_time_unix_nano,
+			attributes_json, resource_json,
+			status_code, status_message,
+			ai_system, ai_model, ai_input_tokens, ai_output_tokens,
+			agent_name, agent_task_id, agent_session_id,
+			cost_usd, tokens_per_sec, anomaly, inserted_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`)
+	if err != nil {
+		return err
+	}
+	defer stmt.Close()
+
+	for i := range spans {
+		sp := &spans[i]
+		_, err := stmt.ExecContext(ctx,
+			sp.TraceID, sp.SpanID, sp.ParentSpanID, sp.Name, sp.Kind,
+			sp.StartTimeUnixNano, sp.EndTimeUnixNano,
+			sp.AttributesJSON, sp.ResourceJSON,
+			sp.StatusCode, sp.StatusMessage,
+			sp.AISystem, sp.AIModel, sp.AIInputTokens, sp.AIOutputTokens,
+			sp.AgentName, sp.AgentTaskID, sp.AgentSessionID,
+			sp.CostUSD, sp.TokensPerSec, sp.Anomaly,
+			sp.InsertedAt.UTC().Format(time.RFC3339),
+		)
+		if err != nil {
+			return fmt.Errorf("insert span %s: %w", sp.SpanID, err)
+		}
+	}
+
+	return tx.Commit()
+}
+
+func (s *SQLiteStore) QuerySpans(ctx context.Context, filter SpanFilter) ([]SpanRecord, error) {
+	where, args := buildSpanWhere(filter)
+	orderBy := "start_time_unix_nano DESC"
+	switch filter.SortBy {
+	case "duration":
+		orderBy = "(end_time_unix_nano - start_time_unix_nano) DESC"
+	case "cost":
+		orderBy = "cost_usd DESC"
+	case "tokens":
+		orderBy = "(ai_input_tokens + ai_output_tokens) DESC"
+	}
+
+	limit := filter.Limit
+	if limit <= 0 {
+		limit = 20
+	}
+
+	query := fmt.Sprintf("SELECT %s FROM spans %s ORDER BY %s LIMIT ?", spanColumns, where, orderBy)
+	args = append(args, limit)
+
+	return s.querySpanRows(ctx, query, args...)
+}
+
+func (s *SQLiteStore) GetTrace(ctx context.Context, traceID string) ([]SpanRecord, error) {
+	query := fmt.Sprintf("SELECT %s FROM spans WHERE trace_id = ? ORDER BY start_time_unix_nano", spanColumns)
+	return s.querySpanRows(ctx, query, traceID)
+}
+
+func (s *SQLiteStore) GetStats(ctx context.Context, filter SpanFilter) (*Stats, error) {
+	where, args := buildSpanWhere(filter)
+	query := fmt.Sprintf(`
+		SELECT
+			COUNT(*) as total_spans,
+			COUNT(DISTINCT trace_id) as total_traces,
+			COUNT(DISTINCT CASE WHEN agent_session_id != '' THEN agent_session_id END) as total_sessions,
+			COALESCE(SUM(ai_input_tokens), 0) as total_input_tokens,
+			COALESCE(SUM(ai_output_tokens), 0) as total_output_tokens,
+			COALESCE(SUM(cost_usd), 0) as total_cost,
+			COUNT(CASE WHEN ai_model != '' THEN 1 END) as ai_span_count,
+			COUNT(CASE WHEN status_code = 2 THEN 1 END) as error_count
+		FROM spans %s
+	`, where)
+
+	var stats Stats
+	err := s.db.QueryRowContext(ctx, query, args...).Scan(
+		&stats.TotalSpans, &stats.TotalTraces, &stats.TotalSessions,
+		&stats.TotalInputTokens, &stats.TotalOutputTokens,
+		&stats.TotalCost, &stats.AISpanCount, &stats.ErrorCount,
+	)
+	if err != nil {
+		return nil, err
+	}
+	return &stats, nil
+}
+
+func (s *SQLiteStore) GetStatsByModel(ctx context.Context, filter SpanFilter) ([]ModelStats, error) {
+	where, args := buildSpanWhere(filter)
+	if where == "" {
+		where = "WHERE ai_model != ''"
+	} else {
+		where += " AND ai_model != ''"
+	}
+
+	query := fmt.Sprintf(`
+		SELECT
+			ai_model,
+			COUNT(*) as span_count,
+			COALESCE(SUM(ai_input_tokens), 0),
+			COALESCE(SUM(ai_output_tokens), 0),
+			COALESCE(SUM(cost_usd), 0),
+			AVG(CASE WHEN end_time_unix_nano > start_time_unix_nano
+				THEN (end_time_unix_nano - start_time_unix_nano) / 1e6 ELSE 0 END),
+			COUNT(CASE WHEN status_code = 2 THEN 1 END)
+		FROM spans %s
+		GROUP BY ai_model ORDER BY span_count DESC
+	`, where)
+
+	rows, err := s.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var result []ModelStats
+	for rows.Next() {
+		var ms ModelStats
+		if err := rows.Scan(&ms.Model, &ms.SpanCount, &ms.InputTokens, &ms.OutputTokens,
+			&ms.TotalCost, &ms.AvgDurationMs, &ms.ErrorCount); err != nil {
+			return nil, err
+		}
+		result = append(result, ms)
+	}
+	return result, rows.Err()
+}
+
+func (s *SQLiteStore) GetStatsByAgent(ctx context.Context, filter SpanFilter) ([]AgentStats, error) {
+	where, args := buildSpanWhere(filter)
+	if where == "" {
+		where = "WHERE agent_name != ''"
+	} else {
+		where += " AND agent_name != ''"
+	}
+
+	query := fmt.Sprintf(`
+		SELECT
+			agent_name,
+			COUNT(*) as span_count,
+			COUNT(DISTINCT CASE WHEN agent_session_id != '' THEN agent_session_id END),
+			COALESCE(SUM(ai_input_tokens), 0),
+			COALESCE(SUM(ai_output_tokens), 0),
+			COALESCE(SUM(cost_usd), 0),
+			COUNT(CASE WHEN status_code = 2 THEN 1 END)
+		FROM spans %s
+		GROUP BY agent_name ORDER BY span_count DESC
+	`, where)
+
+	rows, err := s.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var result []AgentStats
+	for rows.Next() {
+		var as AgentStats
+		if err := rows.Scan(&as.Agent, &as.SpanCount, &as.SessionCount,
+			&as.InputTokens, &as.OutputTokens, &as.TotalCost, &as.ErrorCount); err != nil {
+			return nil, err
+		}
+		result = append(result, as)
+	}
+	return result, rows.Err()
+}
+
+func (s *SQLiteStore) GetCostReport(ctx context.Context, filter SpanFilter, bucket string, groupBy string) ([]CostBucket, error) {
+	where, args := buildSpanWhere(filter)
+
+	var timeFmt string
+	switch bucket {
+	case "day":
+		timeFmt = "%Y-%m-%d"
+	default:
+		timeFmt = "%Y-%m-%dT%H:00"
+	}
+
+	var groupCol string
+	switch groupBy {
+	case "agent":
+		groupCol = "agent_name"
+	case "model":
+		groupCol = "ai_model"
+	default:
+		groupCol = "'all'"
+	}
+
+	query := fmt.Sprintf(`
+		SELECT
+			strftime('%s', datetime(start_time_unix_nano / 1000000000, 'unixepoch')) as bucket,
+			%s as group_by,
+			COALESCE(SUM(cost_usd), 0),
+			COUNT(*)
+		FROM spans %s
+		GROUP BY bucket, group_by
+		ORDER BY bucket
+	`, timeFmt, groupCol, where)
+
+	rows, err := s.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var result []CostBucket
+	for rows.Next() {
+		var cb CostBucket
+		if err := rows.Scan(&cb.Bucket, &cb.GroupBy, &cb.Cost, &cb.SpanCount); err != nil {
+			return nil, err
+		}
+		result = append(result, cb)
+	}
+	return result, rows.Err()
+}
+
+func (s *SQLiteStore) GetSessions(ctx context.Context, filter SessionFilter) ([]Session, error) {
+	var wheres []string
+	var args []any
+
+	wheres = append(wheres, "agent_session_id != ''")
+
+	if filter.Agent != "" {
+		wheres = append(wheres, "agent_name = ?")
+		args = append(args, filter.Agent)
+	}
+	if !filter.Since.IsZero() {
+		wheres = append(wheres, "start_time_unix_nano >= ?")
+		args = append(args, filter.Since.UnixNano())
+	}
+
+	where := "WHERE " + strings.Join(wheres, " AND ")
+	limit := filter.Limit
+	if limit <= 0 {
+		limit = 20
+	}
+
+	query := fmt.Sprintf(`
+		SELECT
+			agent_session_id,
+			COALESCE(MAX(agent_name), '') as agent_name,
+			COUNT(*) as span_count,
+			COUNT(DISTINCT trace_id) as trace_count,
+			datetime(MIN(start_time_unix_nano) / 1000000000, 'unixepoch') as start_time,
+			datetime(MAX(end_time_unix_nano) / 1000000000, 'unixepoch') as end_time,
+			COALESCE(SUM(cost_usd), 0) as total_cost,
+			COALESCE(SUM(ai_input_tokens), 0) as total_input_tokens,
+			COALESCE(SUM(ai_output_tokens), 0) as total_output_tokens,
+			COUNT(CASE WHEN status_code = 2 THEN 1 END) as error_count
+		FROM spans %s
+		GROUP BY agent_session_id
+		ORDER BY start_time DESC
+		LIMIT ?
+	`, where)
+	args = append(args, limit)
+
+	rows, err := s.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var result []Session
+	for rows.Next() {
+		var sess Session
+		var startStr, endStr string
+		if err := rows.Scan(
+			&sess.SessionID, &sess.AgentName, &sess.SpanCount, &sess.TraceCount,
+			&startStr, &endStr,
+			&sess.TotalCost, &sess.TotalInputTokens, &sess.TotalOutputTokens,
+			&sess.ErrorCount,
+		); err != nil {
+			return nil, err
+		}
+		sess.StartTime, _ = time.Parse("2006-01-02 15:04:05", startStr)
+		sess.EndTime, _ = time.Parse("2006-01-02 15:04:05", endStr)
+		result = append(result, sess)
+	}
+	return result, rows.Err()
+}
+
+func (s *SQLiteStore) GetSession(ctx context.Context, sessionID string) ([]SpanRecord, error) {
+	query := fmt.Sprintf("SELECT %s FROM spans WHERE agent_session_id = ? ORDER BY start_time_unix_nano", spanColumns)
+	return s.querySpanRows(ctx, query, sessionID)
+}
+
+func (s *SQLiteStore) GetAnomalies(ctx context.Context, filter SpanFilter) ([]SpanRecord, error) {
+	where, args := buildSpanWhere(filter)
+	if where == "" {
+		where = "WHERE anomaly != ''"
+	} else {
+		where += " AND anomaly != ''"
+	}
+
+	limit := filter.Limit
+	if limit <= 0 {
+		limit = 20
+	}
+
+	query := fmt.Sprintf("SELECT %s FROM spans %s ORDER BY start_time_unix_nano DESC LIMIT ?", spanColumns, where)
+	args = append(args, limit)
+	return s.querySpanRows(ctx, query, args...)
+}
+
+func (s *SQLiteStore) UpsertMetricRollup(ctx context.Context, rollup MetricRollup) error {
+	_, err := s.db.ExecContext(ctx, `
+		INSERT INTO metric_rollups (name, labels_json, bucket_start, bucket_width, metric_type, count, sum, min, max, last)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(name, labels_json, bucket_start, bucket_width) DO UPDATE SET
+			count = count + excluded.count,
+			sum = sum + excluded.sum,
+			min = MIN(min, excluded.min),
+			max = MAX(max, excluded.max),
+			last = excluded.last
+	`, rollup.Name, rollup.LabelsJSON, rollup.BucketStart, rollup.BucketWidth,
+		rollup.MetricType, rollup.Count, rollup.Sum, rollup.Min, rollup.Max, rollup.Last)
+	return err
+}
+
+func (s *SQLiteStore) QueryMetricRollups(ctx context.Context, filter MetricFilter) ([]MetricRollup, error) {
+	var wheres []string
+	var args []any
+
+	wheres = append(wheres, "name = ?")
+	args = append(args, filter.Name)
+
+	if filter.BucketWidth > 0 {
+		wheres = append(wheres, "bucket_width = ?")
+		args = append(args, filter.BucketWidth)
+	}
+	if !filter.Since.IsZero() {
+		wheres = append(wheres, "bucket_start >= ?")
+		args = append(args, filter.Since.Unix())
+	}
+	if len(filter.Labels) > 0 {
+		labelsJSON, _ := json.Marshal(filter.Labels)
+		wheres = append(wheres, "labels_json = ?")
+		args = append(args, string(labelsJSON))
+	}
+
+	where := "WHERE " + strings.Join(wheres, " AND ")
+	query := fmt.Sprintf(`
+		SELECT name, labels_json, bucket_start, bucket_width, metric_type, count, sum, min, max, last
+		FROM metric_rollups %s ORDER BY bucket_start
+	`, where)
+
+	rows, err := s.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var result []MetricRollup
+	for rows.Next() {
+		var m MetricRollup
+		if err := rows.Scan(&m.Name, &m.LabelsJSON, &m.BucketStart, &m.BucketWidth,
+			&m.MetricType, &m.Count, &m.Sum, &m.Min, &m.Max, &m.Last); err != nil {
+			return nil, err
+		}
+		result = append(result, m)
+	}
+	return result, rows.Err()
+}
+
+func (s *SQLiteStore) ListMetricNames(ctx context.Context) ([]string, error) {
+	rows, err := s.db.QueryContext(ctx, "SELECT DISTINCT name FROM metric_rollups ORDER BY name")
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var names []string
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			return nil, err
+		}
+		names = append(names, name)
+	}
+	return names, rows.Err()
+}
+
+func (s *SQLiteStore) Cleanup(ctx context.Context, retentionDays int) (int64, error) {
+	cutoff := time.Now().Add(-time.Duration(retentionDays) * 24 * time.Hour).UnixNano()
+	result, err := s.db.ExecContext(ctx, "DELETE FROM spans WHERE start_time_unix_nano < ?", cutoff)
+	if err != nil {
+		return 0, err
+	}
+	n, _ := result.RowsAffected()
+
+	// Also cleanup old metric rollups
+	metricCutoff := time.Now().Add(-time.Duration(retentionDays) * 24 * time.Hour).Unix()
+	s.db.ExecContext(ctx, "DELETE FROM metric_rollups WHERE bucket_start < ?", metricCutoff)
+
+	return n, nil
+}
+
+// Helpers
+
+const spanColumns = `trace_id, span_id, parent_span_id, name, kind,
+	start_time_unix_nano, end_time_unix_nano,
+	attributes_json, resource_json,
+	status_code, status_message,
+	ai_system, ai_model, ai_input_tokens, ai_output_tokens,
+	agent_name, agent_task_id, agent_session_id,
+	cost_usd, tokens_per_sec, anomaly, inserted_at`
+
+func (s *SQLiteStore) querySpanRows(ctx context.Context, query string, args ...any) ([]SpanRecord, error) {
+	rows, err := s.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var result []SpanRecord
+	for rows.Next() {
+		var sp SpanRecord
+		var insertedStr string
+		if err := rows.Scan(
+			&sp.TraceID, &sp.SpanID, &sp.ParentSpanID, &sp.Name, &sp.Kind,
+			&sp.StartTimeUnixNano, &sp.EndTimeUnixNano,
+			&sp.AttributesJSON, &sp.ResourceJSON,
+			&sp.StatusCode, &sp.StatusMessage,
+			&sp.AISystem, &sp.AIModel, &sp.AIInputTokens, &sp.AIOutputTokens,
+			&sp.AgentName, &sp.AgentTaskID, &sp.AgentSessionID,
+			&sp.CostUSD, &sp.TokensPerSec, &sp.Anomaly, &insertedStr,
+		); err != nil {
+			return nil, err
+		}
+		sp.InsertedAt, _ = time.Parse(time.RFC3339, insertedStr)
+		result = append(result, sp)
+	}
+	return result, rows.Err()
+}
+
+func buildSpanWhere(filter SpanFilter) (string, []any) {
+	var wheres []string
+	var args []any
+
+	if filter.TraceID != "" {
+		wheres = append(wheres, "trace_id = ?")
+		args = append(args, filter.TraceID)
+	}
+	if filter.Agent != "" {
+		wheres = append(wheres, "agent_name = ?")
+		args = append(args, filter.Agent)
+	}
+	if filter.Model != "" {
+		wheres = append(wheres, "ai_model = ?")
+		args = append(args, filter.Model)
+	}
+	if !filter.Since.IsZero() {
+		wheres = append(wheres, "start_time_unix_nano >= ?")
+		args = append(args, filter.Since.UnixNano())
+	}
+	if !filter.Until.IsZero() {
+		wheres = append(wheres, "start_time_unix_nano <= ?")
+		args = append(args, filter.Until.UnixNano())
+	}
+	if filter.DurationGt > 0 {
+		nanos := int64(filter.DurationGt * 1e9)
+		wheres = append(wheres, "(end_time_unix_nano - start_time_unix_nano) > ?")
+		args = append(args, nanos)
+	}
+	if filter.Status != "" {
+		switch filter.Status {
+		case "ok":
+			wheres = append(wheres, "status_code = 1")
+		case "error":
+			wheres = append(wheres, "status_code = 2")
+		case "unset":
+			wheres = append(wheres, "status_code = 0")
+		}
+	}
+	if filter.CostGt > 0 {
+		wheres = append(wheres, "cost_usd > ?")
+		args = append(args, filter.CostGt)
+	}
+
+	if len(wheres) == 0 {
+		return "", nil
+	}
+	return "WHERE " + strings.Join(wheres, " AND "), args
+}

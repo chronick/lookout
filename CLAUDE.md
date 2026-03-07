@@ -4,45 +4,49 @@
 
 **lookout-go** -- OTEL trace collector for AI workflows (Go implementation).
 
-Go 1.25+, stdlib + minimal deps. Accepts OpenTelemetry traces via gRPC and HTTP,
-stores them in SQLite, serves an analytics API. AI-aware: enriches spans with
-cost calculation, token throughput, and anomaly detection.
-
-Alternative to the Rust `lookout` implementation — same functionality, Go ecosystem.
+Go 1.24, stdlib + minimal deps. Accepts OpenTelemetry traces and metrics via
+gRPC and HTTP, stores in SQLite, serves an analytics API. AI-aware: enriches
+spans with cost calculation, token throughput, and anomaly detection.
 
 ## Commands
 
 ```bash
 go build -o lookout-go ./cmd/lookout     # build
+go build -o lookout-seed ./cmd/seed      # build seed script
 go test ./...                             # test all
 ./lookout-go serve                        # start collector
-./lookout-go dash                         # TUI dashboard
-./lookout-go query --limit 5              # query recent spans
+./lookout-go query traces --limit 5       # query recent spans
+./lookout-go query stats                  # aggregate stats
+./lookout-go query sessions               # agent sessions
+./lookout-seed --sessions 5 --traces 10   # seed test data
 ```
 
 ## Layout
 
 ```
-cmd/lookout/main.go              # CLI entry point
+cmd/lookout/main.go              # CLI entry point (serve, query)
+cmd/seed/main.go                 # Test data generator (OTLP sender)
 internal/
+  config/config.go               # Shared configuration struct
+  store/
+    models.go                    # SpanRecord, MetricRollup, Session structs
+    store.go                     # Store interface
+    ring.go                      # In-memory ring buffer
+    sqlite.go                    # SQLite implementation
   otlp/
-    grpc.go                      # OTLP gRPC receiver (google.golang.org/grpc)
-    http.go                      # OTLP HTTP receiver (net/http)
-    types.go                     # OTLP trace types (protobuf generated)
+    http.go                      # OTLP HTTP receiver (traces + metrics)
+    convert.go                   # Proto -> internal model conversion
+    metrics.go                   # OTLP metrics -> rollup conversion
   ai/
     semantic.go                  # GenAI semantic convention constants
+    pricing.go                   # Model pricing table
     enrichment.go                # Cost calc, token throughput, anomaly detection
-  store/
-    store.go                     # Dual-layer store (ring + SQLite)
-    ring.go                      # In-memory ring buffer
-    sqlite.go                    # SQLite persistence + queries
   api/
-    api.go                       # Analytics HTTP API (net/http)
-    routes.go                    # Route handlers
+    server.go                    # Analytics HTTP API (net/http)
     ws.go                        # WebSocket live stream
-  tui/
-    tui.go                       # TUI dashboard (bubbletea/lipgloss)
-proto/                           # OpenTelemetry proto files
+  cli/
+    query.go                     # CLI query command implementation
+    format.go                    # table/json/csv output formatting
 ```
 
 ## Key Design
@@ -51,18 +55,18 @@ proto/                           # OpenTelemetry proto files
 - Dual storage: in-memory ring buffer (hot) + SQLite WAL (persistent)
 - AI enrichment: auto-extracts gen_ai.* and agent.* semantic attributes
 - Cost calculation: model + tokens -> USD using built-in pricing table
+- Metrics rollups: OTLP metrics aggregated into 1m/1h/1d buckets on ingest
+- Sessions: grouped by agent.session_id only
 - Zero-config: sensible defaults, all options via CLI flags or env vars
 - Retention: automatic cleanup of spans older than N days
-- Proto: uses official opentelemetry-proto with protoc-gen-go
+- Proto: uses go.opentelemetry.io/proto/otlp package (no codegen)
 
 ## Dependencies
 
-- google.golang.org/grpc — gRPC server
+- go.opentelemetry.io/proto/otlp — OTLP proto definitions
 - google.golang.org/protobuf — protobuf runtime
 - modernc.org/sqlite — pure-Go SQLite (no CGO)
 - nhooyr.io/websocket — WebSocket support
-- github.com/charmbracelet/bubbletea — TUI framework
-- github.com/charmbracelet/lipgloss — TUI styling
 
 <!-- br-agent-instructions-v1 -->
 

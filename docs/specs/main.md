@@ -1,10 +1,10 @@
 # lookout-go — Spec
 
-OTEL trace collector for AI workflows. Go implementation.
+OTEL trace + metrics collector for AI workflows. Go implementation.
 
 ## Overview
 
-lookout-go accepts OpenTelemetry traces via standard OTLP (gRPC + HTTP), stores
+lookout-go accepts OpenTelemetry traces and metrics via standard OTLP (gRPC + HTTP), stores
 them in SQLite, and serves an analytics API. It understands AI workflow semantics
 — chat completions, tool calls, agent sessions — and auto-enriches spans with
 cost, throughput, and anomaly data.
@@ -14,16 +14,17 @@ bosun agent containers, and any OTEL-instrumented service.
 
 ## Goals
 
-- **Standard ingest**: OTLP gRPC (:4317) and HTTP/protobuf (:4318), no custom SDKs
+- **Standard ingest**: OTLP gRPC (:4317) and HTTP/protobuf (:4318) for traces + metrics
 - **AI-native**: first-class support for GenAI semantic conventions + agent workflows
 - **Simple ops**: single binary, SQLite storage, no external dependencies at runtime
 - **Fast reads**: in-memory ring buffer for live dashboard, SQLite for historical queries
 - **Actionable**: cost tracking, throughput metrics, anomaly detection out of the box
+- **Metrics rollups**: aggregate OTLP metrics on ingest into time-bucketed rollups (1m, 1h, 1d)
 
 ## Non-Goals
 
 - Full APM/distributed tracing platform (use Jaeger/Tempo for that)
-- Metrics or logs collection (traces only)
+- Logs collection (traces + metrics only)
 - Multi-tenant / multi-user access control
 - Horizontal scaling (single-node by design)
 
@@ -54,10 +55,10 @@ bosun agent containers, and any OTEL-instrumented service.
 │  │  └──────────┘ └───────────┘ │                         │
 │  └──────────────────────────────┘                        │
 │                                                          │
-│  ┌──────────────┐  ┌──────────────┐                      │
-│  │  TUI (dash)  │  │ Push Metrics │                      │
-│  │  bubbletea   │  │  HTTP POST   │                      │
-│  └──────────────┘  └──────────────┘                      │
+│  ┌─────────────┐ ┌─────────────┐ ┌──────────────┐       │
+│  │  MCP Server │ │  Web UI     │ │  TUI (dash)  │       │
+│  │  stdio      │ │  templ+htmx │ │  bubbletea   │       │
+│  └─────────────┘ └─────────────┘ └──────────────┘       │
 └──────────────────────────────────────────────────────────┘
 ```
 
@@ -85,7 +86,28 @@ bosun agent containers, and any OTEL-instrumented service.
 | agent_name | string? | Extracted from `agent.name` |
 | agent_task_id | string? | Extracted from `agent.task_id` |
 | agent_session_id | string? | Extracted from `agent.session_id` |
+| cost_usd | float64 | Computed on ingest |
+| tokens_per_sec | float64 | Computed on ingest |
+| anomaly | string | Computed on ingest |
 | inserted_at | datetime | Server-side timestamp |
+
+### MetricRollup
+
+```sql
+CREATE TABLE metric_rollups (
+  name         TEXT    NOT NULL,
+  labels_json  TEXT    NOT NULL DEFAULT '{}',
+  bucket_start INTEGER NOT NULL,  -- unix seconds, aligned to interval
+  bucket_width INTEGER NOT NULL,  -- 60, 3600, or 86400
+  metric_type  TEXT    NOT NULL,  -- 'sum', 'gauge', 'histogram'
+  count        INTEGER NOT NULL DEFAULT 0,
+  sum          REAL    NOT NULL DEFAULT 0,
+  min          REAL    NOT NULL DEFAULT 0,
+  max          REAL    NOT NULL DEFAULT 0,
+  last         REAL    NOT NULL DEFAULT 0,
+  PRIMARY KEY (name, labels_json, bucket_start, bucket_width)
+);
+```
 
 ### AI Semantic Conventions
 
@@ -98,6 +120,10 @@ Follows [OpenTelemetry GenAI semconv](https://opentelemetry.io/docs/specs/semcon
 | `agent.session` | `agent.name`, `agent.session_id`, `agent.task_id`, `agent.repo` | bosun lifecycle |
 | `agent.step` | `agent.step.type` (claim, work, pr, reset) | Single work unit |
 | `agent.sandbox` | `container.id`, `container.image` | Spawned via skiff |
+
+### Session Grouping
+
+Sessions are grouped by `agent.session_id` only. Non-agent traces have no session grouping.
 
 ## Enrichment
 
@@ -143,77 +169,128 @@ Lookup model in pricing table, compute: `(input_tokens * input_price + output_to
 ### SQLite
 
 - WAL journal mode, busy timeout 5s
-- Single `spans` table with indexes on: trace_id, start_time, ai_model, agent_name, agent_session_id, status_code
+- `spans` table with indexes on: trace_id, start_time, ai_model, agent_name, agent_session_id, status_code
+- `metric_rollups` table with composite primary key for upsert aggregation
 - Pure Go via `modernc.org/sqlite` (no CGO required)
 - Configurable retention (default 7 days, hourly cleanup)
 
 ## Analytics API
 
-All endpoints on `:4320`.
+All endpoints on `:4320`. All return JSON.
+
+### Traces
 
 | Method | Path | Description |
 |--------|------|-------------|
-| GET | `/v1/traces` | List spans (filter: `?agent=`, `?model=`, `?limit=`) |
-| GET | `/v1/traces/{trace_id}` | All spans for a trace |
-| GET | `/v1/recent` | Recent spans from ring buffer (`?limit=`) |
-| GET | `/v1/stats` | Aggregate stats (total spans, traces, tokens, AI spans, sessions) |
-| GET | `/v1/stats/by-model` | Stats grouped by model |
-| GET | `/v1/stats/by-agent` | Stats grouped by agent name |
-| GET | `/v1/stats/cost` | Cost report (`?bucket=hour|day`, `?since=24h`, `?group_by=model|agent`) |
-| GET | `/v1/sessions` | Agent sessions with aggregated stats (`?limit=`) |
-| GET | `/v1/anomalies` | Anomalous spans (`?limit=`) |
-| WS | `/v1/live` | WebSocket stream of incoming spans (enriched) |
-| GET | `/health` | Health check → `ok` |
+| GET | `/v1/traces` | List spans (filter: agent, model, since, until, status, duration_gt, cost_gt, sort_by, limit) |
+| GET | `/v1/traces/{trace_id}` | All spans for a trace (span tree) |
+| GET | `/v1/recent` | Recent spans from ring buffer |
 
-All responses are JSON. Span responses include an `enrichment` object with `cost_usd`, `tokens_per_sec`, and `anomaly`.
+### Sessions
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/v1/sessions` | Agent sessions with aggregated stats (filter: agent, since, limit) |
+| GET | `/v1/sessions/{session_id}` | All spans in a session, grouped by trace |
+
+### Stats
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/v1/stats` | Aggregate stats (total spans, traces, tokens, cost, sessions) |
+| GET | `/v1/stats/by-model` | Stats grouped by model |
+| GET | `/v1/stats/by-agent` | Stats grouped by agent |
+| GET | `/v1/stats/cost` | Cost report (bucket=hour|day, since, group_by=model|agent) |
+
+### Metrics
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/v1/metrics/names` | List distinct metric names |
+| GET | `/v1/metrics/{name}` | Query rollups (since, bucket=1m|1h|1d, labels) |
+
+### Anomalies
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/v1/anomalies` | Anomalous spans (filter: agent, since, limit) |
+
+### Live + Health
+
+| Method | Path | Description |
+|--------|------|-------------|
+| WS | `/v1/live` | WebSocket stream of enriched spans |
+| GET | `/health` | Health check |
 
 ## CLI
 
 ```
-lookout-go [command] [flags]
+lookout-go <command> [flags]
 
 Commands:
-  serve     Start the collector daemon (default)
-  dash      Launch the TUI dashboard
-  query     Query spans from the CLI
+  serve     Start the collector daemon
+  query     Query spans, sessions, metrics, stats, anomalies
+  mcp       Start MCP server (stdio)
+  dash      Launch TUI dashboard
 
-Global flags:
+Serve flags:
   --grpc-addr      OTLP gRPC address      (env: LOOKOUT_GRPC_ADDR,   default: 0.0.0.0:4317)
   --http-addr      OTLP HTTP address      (env: LOOKOUT_HTTP_ADDR,   default: 0.0.0.0:4318)
   --api-addr       Analytics API address   (env: LOOKOUT_API_ADDR,    default: 0.0.0.0:4320)
   --db-path        SQLite database path    (env: LOOKOUT_DB_PATH,     default: ~/.lookout/traces.db)
   --ring-size      Ring buffer capacity    (env: LOOKOUT_RING_SIZE,   default: 10000)
   --retention-days Retention period        (env: LOOKOUT_RETENTION_DAYS, default: 7)
-  --push-url       Push metrics URL        (env: LOOKOUT_PUSH_URL,    default: "")
-  --push-interval  Push interval seconds   (env: LOOKOUT_PUSH_INTERVAL, default: 60)
 
-Query flags:
-  --trace-id       Filter by trace ID
-  --agent          Filter by agent name
-  --model          Filter by model
-  --limit          Max results (default: 20)
+Query subcommands:
+  traces      --trace-id, --agent, --model, --since, --until, --duration-gt,
+              --status, --cost-gt, --sort-by, --limit, --format
+  sessions    --agent, --since, --limit, --format
+  metrics     --name (required), --since, --bucket, --labels, --format
+  stats       --since, --group-by, --format
+  anomalies   --since, --agent, --limit, --format
+
+Output formats: table (default) | json | csv
 ```
 
-## TUI Dashboard
+## MCP Server
 
-Three tabs, navigated with Tab/arrow keys:
+MCP server runs over stdio. Launched via `lookout-go mcp`.
 
-### Overview
-- Left panel: summary stats (spans, traces, AI spans, sessions, tokens)
-- Left panel: by-model breakdown table
-- Left panel: by-agent breakdown table
-- Right panel: recent spans with name, model, duration, cost, anomaly flag
+### Query Tools
+- `query_traces` — filter spans by agent, model, time range, status, cost
+- `query_sessions` — list agent sessions with stats
+- `get_session` — all spans in a session with trace grouping
+- `get_stats` — aggregate stats, optionally grouped by model/agent
+- `get_anomalies` — list anomalous spans
+- `query_metrics` — query metric rollups by name and time range
 
-### Spans
-- Full span table: span_id, trace_id, name, model, agent, duration, cost, tok/s
-- Scrollable with j/k or arrow keys
+### Analytical Tools
+- `analyze_session` — summarize a session: cost, duration, models, tools, errors, tokens
+- `compare_models` — cost/performance comparison across models
+- `suggest_optimizations` — identify expensive patterns, suggest improvements
 
-### Anomalies
-- Filtered to anomalous spans only
-- Shows span_id, name, model, agent, anomaly reason
-- Red-highlighted rows
+### Resources
+- `lookout://stats` — live stats summary
+- `lookout://sessions/recent` — recent sessions list
 
-Refresh: auto-refresh from store every 2 seconds. Quit: `q` or `Esc`.
+## Web UI
+
+Served on `:4320` under `/ui/`. Embedded in the Go binary.
+
+### Pages
+- `/ui/` — Dashboard: stats cards, recent activity, cost chart
+- `/ui/traces` — Traces list: filterable/sortable table
+- `/ui/traces/{trace_id}` — Trace detail: span tree with timing waterfall
+- `/ui/sessions` — Sessions list
+- `/ui/sessions/{id}` — Session detail: all traces, timeline
+- `/ui/metrics` — Metrics: name selector, time-series chart
+- `/ui/anomalies` — Anomalies list
+
+### Tech
+- `github.com/a-h/templ` for type-safe HTML templates
+- htmx for dynamic updates
+- Minimal CSS (classless or pico.css, embedded)
+- No npm, no JS build step — ships in Go binary
 
 ## Configuration
 
@@ -234,7 +311,6 @@ obs.lookout:
     - "~/.lookout:/data"
   env:
     LOOKOUT_DB_PATH: /data/traces.db
-    LOOKOUT_PUSH_URL: http://core.skiff.local:8080/v1/metrics
 ```
 
 ### Client configuration
@@ -242,13 +318,8 @@ obs.lookout:
 Any OTEL SDK exporter pointed at lookout works:
 
 ```bash
-# Environment variables for OTEL SDK
 export OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318
 export OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf
-
-# Or gRPC
-export OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4317
-export OTEL_EXPORTER_OTLP_PROTOCOL=grpc
 ```
 
 ## Dependencies
@@ -257,32 +328,19 @@ export OTEL_EXPORTER_OTLP_PROTOCOL=grpc
 |---------|---------|
 | google.golang.org/grpc | OTLP gRPC server |
 | google.golang.org/protobuf | Protobuf runtime |
-| go.opentelemetry.io/proto/otlp | OTLP proto definitions |
+| go.opentelemetry.io/proto/otlp | OTLP proto definitions (no codegen) |
 | modernc.org/sqlite | Pure-Go SQLite driver |
 | nhooyr.io/websocket | WebSocket for /v1/live |
-| github.com/charmbracelet/bubbletea | TUI framework |
-| github.com/charmbracelet/lipgloss | TUI styling |
+| github.com/a-h/templ | Type-safe HTML templates (Web UI) |
+| github.com/mark3labs/mcp-go | MCP server framework |
+| github.com/charmbracelet/bubbletea | TUI framework (deferred) |
+| github.com/charmbracelet/lipgloss | TUI styling (deferred) |
 
 ## Phases
 
 | Phase | Tasks | Outcome |
 |-------|-------|---------|
-| **1 — Core** | CLI scaffold, proto codegen, gRPC receiver, HTTP receiver, SQLite store | Accepts and stores OTLP traces |
-| **2 — Intelligence** | Ring buffer, AI enrichment, analytics API, WebSocket, sessions, Dockerfile + CI | Full analytics + live streaming |
-| **3 — Visibility** | TUI dashboard, push metrics | Operational visibility |
-
-## Comparison: lookout (Rust) vs lookout-go
-
-| Aspect | lookout (Rust) | lookout-go |
-|--------|---------------|------------|
-| SQLite | rusqlite (C binding) | modernc.org/sqlite (pure Go) |
-| gRPC | tonic | google.golang.org/grpc |
-| HTTP API | axum | net/http |
-| TUI | ratatui + crossterm | bubbletea + lipgloss |
-| WebSocket | axum ws | nhooyr.io/websocket |
-| Binary size | Smaller | Larger (Go runtime) |
-| Build | cargo build | go build (faster, no C compiler) |
-| CGO | Required (rusqlite) | Not required |
-| Cross-compile | Harder | Trivial (GOOS/GOARCH) |
-
-Both implementations share the same: ports, API endpoints, data model, enrichment logic, semantic conventions, and TUI layout.
+| **1 — Core Ingest** | CLI scaffold, SQLite store, OTLP HTTP receiver, AI enrichment, seed script | Accepts traces+metrics, enriches, stores |
+| **2 — Query Layer** | Rich CLI query, ring buffer, analytics API, metrics rollups, sessions | Full query + analytics |
+| **3 — Interfaces** | MCP server, Web UI, WebSocket live stream | External integrations |
+| **4 — Ops + Polish** | OTLP gRPC receiver, Dockerfile + CI, TUI dashboard, push metrics | Production-ready |
