@@ -11,6 +11,7 @@ spans with cost calculation, token throughput, and anomaly detection.
 ## Commands
 
 ```bash
+templ generate ./internal/web/           # generate templ -> Go (run after editing .templ files)
 go build -o lookout-go ./cmd/lookout     # build
 go build -o lookout-seed ./cmd/seed      # build seed script
 go test ./...                             # test all
@@ -37,6 +38,14 @@ internal/
     http.go                      # OTLP HTTP receiver (traces + metrics)
     convert.go                   # Proto -> internal model conversion
     metrics.go                   # OTLP metrics -> rollup conversion
+  web/
+    handlers.go                  # Web UI HTTP handlers (/ui/*)
+    layout.templ                 # Base HTML layout (pico.css + htmx)
+    dashboard.templ              # Dashboard page (stats + recent spans)
+    traces.templ                 # Traces list + trace detail
+    sessions.templ               # Sessions list + session detail
+    anomalies.templ              # Anomalies page
+    components.templ             # Shared components (span table, badges)
   ai/
     semantic.go                  # GenAI semantic convention constants
     pricing.go                   # Model pricing table
@@ -59,6 +68,7 @@ internal/
 - Sessions: grouped by agent.session_id only
 - Zero-config: sensible defaults, all options via CLI flags or env vars
 - Retention: automatic cleanup of spans older than N days
+- Web UI: templ + htmx on :4320/ui/ — pico.css dark theme, htmx polling for live updates
 - Proto: uses go.opentelemetry.io/proto/otlp package (no codegen)
 
 ## Dependencies
@@ -66,6 +76,7 @@ internal/
 - go.opentelemetry.io/proto/otlp — OTLP proto definitions
 - google.golang.org/protobuf — protobuf runtime
 - modernc.org/sqlite — pure-Go SQLite (no CGO)
+- github.com/a-h/templ — type-safe HTML templates (run `templ generate` after editing .templ files)
 - nhooyr.io/websocket — WebSocket support
 
 <!-- br-agent-instructions-v1 -->

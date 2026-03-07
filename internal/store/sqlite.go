@@ -53,6 +53,7 @@ func (s *SQLiteStore) migrate() error {
 			agent_name        TEXT NOT NULL DEFAULT '',
 			agent_task_id     TEXT NOT NULL DEFAULT '',
 			agent_session_id  TEXT NOT NULL DEFAULT '',
+			events_json       TEXT NOT NULL DEFAULT '[]',
 			cost_usd          REAL NOT NULL DEFAULT 0,
 			tokens_per_sec    REAL NOT NULL DEFAULT 0,
 			anomaly           TEXT NOT NULL DEFAULT '',
@@ -81,7 +82,14 @@ func (s *SQLiteStore) migrate() error {
 			PRIMARY KEY (name, labels_json, bucket_start, bucket_width)
 		);
 	`)
-	return err
+	if err != nil {
+		return err
+	}
+
+	// Migration: add events_json column if missing
+	s.db.Exec(`ALTER TABLE spans ADD COLUMN events_json TEXT NOT NULL DEFAULT '[]'`)
+
+	return nil
 }
 
 func (s *SQLiteStore) Close() error {
@@ -103,8 +111,8 @@ func (s *SQLiteStore) InsertSpans(ctx context.Context, spans []SpanRecord) error
 			status_code, status_message,
 			ai_system, ai_model, ai_input_tokens, ai_output_tokens,
 			agent_name, agent_task_id, agent_session_id,
-			cost_usd, tokens_per_sec, anomaly, inserted_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			events_json, cost_usd, tokens_per_sec, anomaly, inserted_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`)
 	if err != nil {
 		return err
@@ -113,6 +121,10 @@ func (s *SQLiteStore) InsertSpans(ctx context.Context, spans []SpanRecord) error
 
 	for i := range spans {
 		sp := &spans[i]
+		eventsJSON := sp.EventsJSON
+		if eventsJSON == "" {
+			eventsJSON = "[]"
+		}
 		_, err := stmt.ExecContext(ctx,
 			sp.TraceID, sp.SpanID, sp.ParentSpanID, sp.Name, sp.Kind,
 			sp.StartTimeUnixNano, sp.EndTimeUnixNano,
@@ -120,7 +132,7 @@ func (s *SQLiteStore) InsertSpans(ctx context.Context, spans []SpanRecord) error
 			sp.StatusCode, sp.StatusMessage,
 			sp.AISystem, sp.AIModel, sp.AIInputTokens, sp.AIOutputTokens,
 			sp.AgentName, sp.AgentTaskID, sp.AgentSessionID,
-			sp.CostUSD, sp.TokensPerSec, sp.Anomaly,
+			eventsJSON, sp.CostUSD, sp.TokensPerSec, sp.Anomaly,
 			sp.InsertedAt.UTC().Format(time.RFC3339),
 		)
 		if err != nil {
@@ -503,7 +515,7 @@ const spanColumns = `trace_id, span_id, parent_span_id, name, kind,
 	status_code, status_message,
 	ai_system, ai_model, ai_input_tokens, ai_output_tokens,
 	agent_name, agent_task_id, agent_session_id,
-	cost_usd, tokens_per_sec, anomaly, inserted_at`
+	events_json, cost_usd, tokens_per_sec, anomaly, inserted_at`
 
 func (s *SQLiteStore) querySpanRows(ctx context.Context, query string, args ...any) ([]SpanRecord, error) {
 	rows, err := s.db.QueryContext(ctx, query, args...)
@@ -523,7 +535,7 @@ func (s *SQLiteStore) querySpanRows(ctx context.Context, query string, args ...a
 			&sp.StatusCode, &sp.StatusMessage,
 			&sp.AISystem, &sp.AIModel, &sp.AIInputTokens, &sp.AIOutputTokens,
 			&sp.AgentName, &sp.AgentTaskID, &sp.AgentSessionID,
-			&sp.CostUSD, &sp.TokensPerSec, &sp.Anomaly, &insertedStr,
+			&sp.EventsJSON, &sp.CostUSD, &sp.TokensPerSec, &sp.Anomaly, &insertedStr,
 		); err != nil {
 			return nil, err
 		}

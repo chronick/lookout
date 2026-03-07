@@ -1,0 +1,355 @@
+package web
+
+import (
+	"fmt"
+
+	"github.com/chronick/lookout-go/internal/store"
+)
+
+templ tracesPage(spans []store.SpanRecord) {
+	@layout("Traces", "traces") {
+		<hgroup>
+			<h2>Traces</h2>
+			<p>All collected trace spans</p>
+		</hgroup>
+		<details>
+			<summary>Filters</summary>
+			<form hx-get="/traces" hx-target="main" hx-select="main > *" hx-swap="innerHTML" hx-push-url="true">
+				<div class="grid">
+					<label>
+						Agent
+						<input type="text" name="agent" placeholder="agent name"/>
+					</label>
+					<label>
+						Model
+						<input type="text" name="model" placeholder="model name"/>
+					</label>
+					<label>
+						Since
+						<select name="since">
+							<option value="">All time</option>
+							<option value="15m">Last 15m</option>
+							<option value="1h" selected>Last 1h</option>
+							<option value="24h">Last 24h</option>
+							<option value="7d">Last 7d</option>
+						</select>
+					</label>
+				</div>
+				<div class="grid">
+					<label>
+						Status
+						<select name="status">
+							<option value="">All</option>
+							<option value="ok">OK</option>
+							<option value="error">Error</option>
+						</select>
+					</label>
+					<label>
+						Sort by
+						<select name="sort_by">
+							<option value="time">Time</option>
+							<option value="duration">Duration</option>
+							<option value="cost">Cost</option>
+							<option value="tokens">Tokens</option>
+						</select>
+					</label>
+					<label>
+						Limit
+						<select name="limit">
+							<option value="20">20</option>
+							<option value="50">50</option>
+							<option value="100">100</option>
+						</select>
+					</label>
+				</div>
+				<button type="submit">Apply</button>
+			</form>
+		</details>
+		@spanTable(spans, true)
+	}
+}
+
+templ traceDetailPage(traceID string, spans []store.SpanRecord) {
+	@layout("Trace " + shortID(traceID), "traces") {
+		<hgroup>
+			<h2>Trace Detail</h2>
+			<p class="mono">{ traceID }</p>
+		</hgroup>
+		<p>
+			<a href="/traces">&larr; Back to traces</a>
+		</p>
+		if len(spans) > 0 {
+			@traceSummary(spans)
+		}
+		<h3>Conversation</h3>
+		@conversationView(spans)
+		<h3>All Spans</h3>
+		@spanTable(spans, false)
+	}
+}
+
+templ traceSummary(spans []store.SpanRecord) {
+	<div class="stats-grid">
+		@statCard("Spans", fmt.Sprintf("%d", len(spans)))
+		@statCard("Duration", traceDuration(spans))
+		@statCard("Tokens", traceTokens(spans))
+		@statCard("Cost", traceCost(spans))
+	</div>
+}
+
+func traceTokens(spans []store.SpanRecord) string {
+	var in, out int64
+	for _, s := range spans {
+		in += s.AIInputTokens
+		out += s.AIOutputTokens
+	}
+	if in == 0 && out == 0 {
+		return "-"
+	}
+	return fmt.Sprintf("%d / %d", in, out)
+}
+
+func traceCost(spans []store.SpanRecord) string {
+	var total float64
+	for _, s := range spans {
+		total += s.CostUSD
+	}
+	if total == 0 {
+		return "-"
+	}
+	return fmt.Sprintf("$%.4f", total)
+}
+
+func traceModelName(spans []store.SpanRecord) string {
+	for _, s := range spans {
+		if s.AIModel != "" {
+			return s.AIModel
+		}
+	}
+	return ""
+}
+
+func traceAgentName(spans []store.SpanRecord) string {
+	for _, s := range spans {
+		if s.AgentName != "" {
+			return s.AgentName
+		}
+	}
+	return ""
+}
+
+func traceSessionID(spans []store.SpanRecord) string {
+	for _, s := range spans {
+		if s.AgentSessionID != "" {
+			return s.AgentSessionID
+		}
+	}
+	return ""
+}
+
+func traceSpanDuration(s store.SpanRecord) string {
+	return formatDuration(s.StartTimeUnixNano, s.EndTimeUnixNano)
+}
+
+func traceAgentLink(spans []store.SpanRecord) string {
+	sid := traceSessionID(spans)
+	if sid != "" {
+		return "/sessions/" + sid
+	}
+	return ""
+}
+
+func traceAgentSuffix(spans []store.SpanRecord) string {
+	a := traceAgentName(spans)
+	s := traceSessionID(spans)
+	if a != "" && s != "" {
+		return a + " / " + shortID(s)
+	}
+	if a != "" {
+		return a
+	}
+	return ""
+}
+
+func traceModel(spans []store.SpanRecord) string {
+	m := traceModelName(spans)
+	if m != "" {
+		return m
+	}
+	return "-"
+}
+
+func traceStartNano(spans []store.SpanRecord) uint64 {
+	if len(spans) == 0 {
+		return 0
+	}
+	min := spans[0].StartTimeUnixNano
+	for _, s := range spans[1:] {
+		if s.StartTimeUnixNano < min {
+			min = s.StartTimeUnixNano
+		}
+	}
+	return min
+}
+
+func traceEndNano(spans []store.SpanRecord) uint64 {
+	if len(spans) == 0 {
+		return 0
+	}
+	max := spans[0].EndTimeUnixNano
+	for _, s := range spans[1:] {
+		if s.EndTimeUnixNano > max {
+			max = s.EndTimeUnixNano
+		}
+	}
+	return max
+}
+
+func traceMinStartNano(spans []store.SpanRecord) uint64 {
+	return traceStartNano(spans)
+}
+
+func traceMaxEndNano(spans []store.SpanRecord) uint64 {
+	return traceEndNano(spans)
+}
+
+func traceMaxStartNano(spans []store.SpanRecord) uint64 {
+	return traceEndNano(spans)
+}
+
+func traceMinEndNano(spans []store.SpanRecord) uint64 {
+	return traceStartNano(spans)
+}
+
+func traceMinStart(spans []store.SpanRecord) string {
+	return formatNanoTime(traceStartNano(spans))
+}
+
+func traceMaxEnd(spans []store.SpanRecord) string {
+	return formatNanoTime(traceEndNano(spans))
+}
+
+func traceMinStartDate(spans []store.SpanRecord) string {
+	return formatNanoDate(traceStartNano(spans))
+}
+
+func traceMaxEndDate(spans []store.SpanRecord) string {
+	return formatNanoDate(traceEndNano(spans))
+}
+
+func traceMinStartDateTime(spans []store.SpanRecord) string {
+	return formatNanoDateTime(traceStartNano(spans))
+}
+
+func traceMaxEndDateTime(spans []store.SpanRecord) string {
+	return formatNanoDateTime(traceEndNano(spans))
+}
+
+func traceDuration(spans []store.SpanRecord) string {
+	s := traceStartNano(spans)
+	e := traceEndNano(spans)
+	return formatDuration(s, e)
+}
+
+func eventAttr(event store.SpanEvent, key string) string {
+	if v, ok := event.Attributes[key]; ok {
+		if s, ok := v.(string); ok {
+			return s
+		}
+	}
+	return ""
+}
+
+templ conversationView(spans []store.SpanRecord) {
+	<div class="conversation">
+		for _, s := range spans {
+			if s.Name == "gen_ai.chat_completion" {
+				@chatCompletionBlock(s)
+			} else if s.Name == "gen_ai.tool_call" {
+				@toolCallBlock(s)
+			}
+		}
+		if len(spans) == 0 {
+			<p><em>No spans in this trace</em></p>
+		}
+	</div>
+}
+
+templ chatCompletionBlock(s store.SpanRecord) {
+	<article class="chat-block">
+		<header>
+			<div class="chat-meta">
+				<strong>Chat Completion</strong>
+				if s.AIModel != "" {
+					<span class="badge badge-unset">{ s.AIModel }</span>
+				}
+				@statusBadge(s.StatusCode)
+				@anomalyBadge(s.Anomaly)
+			</div>
+			<small class="mono">
+				{ formatNanoTime(s.StartTimeUnixNano) }
+				&middot; { formatDuration(s.StartTimeUnixNano, s.EndTimeUnixNano) }
+				if s.CostUSD > 0 {
+					&middot; <span class="cost">{ formatCost(s.CostUSD) }</span>
+				}
+				if s.AIInputTokens > 0 || s.AIOutputTokens > 0 {
+					&middot; { formatTokens(s.AIInputTokens, s.AIOutputTokens) } tokens
+				}
+			</small>
+		</header>
+		for _, ev := range s.ParsedEvents() {
+			if ev.Name == "gen_ai.content.prompt" {
+				if eventAttr(ev, "gen_ai.prompt") != "" {
+					<div class="msg msg-user">
+						<div class="msg-role">User</div>
+						<div class="msg-content">{ eventAttr(ev, "gen_ai.prompt") }</div>
+					</div>
+				}
+			}
+			if ev.Name == "gen_ai.content.completion" {
+				if eventAttr(ev, "gen_ai.completion") != "" {
+					<div class="msg msg-assistant">
+						<div class="msg-role">Assistant</div>
+						<div class="msg-content">{ eventAttr(ev, "gen_ai.completion") }</div>
+					</div>
+				}
+			}
+		}
+	</article>
+}
+
+templ toolCallBlock(s store.SpanRecord) {
+	<article class="tool-block">
+		<header>
+			<div class="chat-meta">
+				<strong>Tool Call</strong>
+				if toolName(s) != "" {
+					<span class="badge badge-unset">{ toolName(s) }</span>
+				}
+				@statusBadge(s.StatusCode)
+			</div>
+			<small class="mono">
+				{ formatNanoTime(s.StartTimeUnixNano) }
+				&middot; { formatDuration(s.StartTimeUnixNano, s.EndTimeUnixNano) }
+			</small>
+		</header>
+		for _, ev := range s.ParsedEvents() {
+			if ev.Name == "gen_ai.tool.input" {
+				if eventAttr(ev, "gen_ai.tool.input") != "" {
+					<div class="tool-io">
+						<div class="tool-label">Input</div>
+						<pre class="tool-content">{ eventAttr(ev, "gen_ai.tool.input") }</pre>
+					</div>
+				}
+			}
+			if ev.Name == "gen_ai.tool.output" {
+				if eventAttr(ev, "gen_ai.tool.output") != "" {
+					<div class="tool-io">
+						<div class="tool-label">Output</div>
+						<pre class="tool-content">{ eventAttr(ev, "gen_ai.tool.output") }</pre>
+					</div>
+				}
+			}
+		}
+	</article>
+}

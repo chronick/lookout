@@ -1,0 +1,62 @@
+package web
+
+templ layout(title string, currentPage string) {
+	<!DOCTYPE html>
+	<html lang="en" data-theme="dark">
+		<head>
+			<meta charset="utf-8"/>
+			<meta name="viewport" content="width=device-width, initial-scale=1"/>
+			<title>{ title } - Lookout</title>
+			<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@picocss/pico@2/css/pico.min.css"/>
+			<script src="https://unpkg.com/htmx.org@2.0.4"></script>
+			<style>
+				:root { --pico-font-size: 87.5%; }
+				nav .brand { font-weight: 700; font-size: 1.2rem; }
+				.stats-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 1rem; margin-bottom: 1.5rem; }
+				.stat-card { text-align: center; padding: 1rem; }
+				.stat-card h3 { margin-bottom: 0.25rem; font-size: 1.8rem; }
+				.stat-card small { opacity: 0.7; }
+				table { font-size: 0.85rem; }
+				.badge { display: inline-block; padding: 0.15rem 0.5rem; border-radius: 4px; font-size: 0.75rem; font-weight: 600; }
+				.badge-ok { background: var(--pico-ins-color); color: #fff; }
+				.badge-error { background: var(--pico-del-color); color: #fff; }
+				.badge-unset { background: var(--pico-secondary); color: #fff; }
+				.badge-anomaly { background: #e67e22; color: #fff; }
+				.mono { font-family: monospace; font-size: 0.8rem; }
+				.truncate { max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+				.cost { color: var(--pico-ins-color); }
+				a.active { font-weight: 700; }
+				.conversation { display: flex; flex-direction: column; gap: 0.5rem; }
+				.chat-block { margin-bottom: 0; }
+				.chat-block header { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 0.5rem; }
+				.chat-meta { display: flex; align-items: center; gap: 0.5rem; }
+				.tool-block { margin-bottom: 0; border-left: 3px solid var(--pico-secondary); }
+				.tool-block header { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 0.5rem; }
+				.msg { padding: 0.75rem 1rem; border-radius: 8px; margin: 0.5rem 0; }
+				.msg-user { background: color-mix(in srgb, var(--pico-primary) 15%, transparent); border-left: 3px solid var(--pico-primary); }
+				.msg-assistant { background: color-mix(in srgb, var(--pico-ins-color) 10%, transparent); border-left: 3px solid var(--pico-ins-color); }
+				.msg-role { font-size: 0.7rem; font-weight: 700; text-transform: uppercase; opacity: 0.7; margin-bottom: 0.25rem; }
+				.msg-content { white-space: pre-wrap; font-size: 0.9rem; line-height: 1.5; }
+				.tool-io { margin: 0.5rem 0; }
+				.tool-label { font-size: 0.7rem; font-weight: 700; text-transform: uppercase; opacity: 0.7; margin-bottom: 0.25rem; }
+				.tool-content { font-size: 0.8rem; margin: 0; padding: 0.5rem; white-space: pre-wrap; }
+			</style>
+		</head>
+		<body hx-boost="true">
+			<nav class="container-fluid">
+				<ul>
+					<li><strong class="brand">Lookout</strong></li>
+				</ul>
+				<ul>
+					<li><a href="/" if currentPage == "dashboard" { class="active" }>Dashboard</a></li>
+					<li><a href="/traces" if currentPage == "traces" { class="active" }>Traces</a></li>
+					<li><a href="/sessions" if currentPage == "sessions" { class="active" }>Sessions</a></li>
+					<li><a href="/anomalies" if currentPage == "anomalies" { class="active" }>Anomalies</a></li>
+				</ul>
+			</nav>
+			<main class="container">
+				{ children... }
+			</main>
+		</body>
+	</html>
+}

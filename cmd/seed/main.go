@@ -23,7 +23,56 @@ import (
 
 var models = []string{"claude-opus-4", "claude-sonnet-4", "claude-haiku-4-5", "gpt-4o", "o3"}
 var agents = []string{"bosun", "claude-code", "codex", "aider"}
-var tools = []string{"Bash", "Read", "Edit", "Write", "Grep", "Glob"}
+var toolNames = []string{"Bash", "Read", "Edit", "Write", "Grep", "Glob"}
+
+var userPrompts = []string{
+	"Fix the failing test in auth_test.go",
+	"Add a retry mechanism to the HTTP client",
+	"Refactor the database connection pooling",
+	"Why is the API returning 500 errors on /users endpoint?",
+	"Update the Dockerfile to use multi-stage builds",
+	"Add input validation to the signup form handler",
+	"The CI pipeline is failing on the lint step, can you investigate?",
+	"Implement pagination for the list endpoints",
+}
+
+var assistantResponses = []string{
+	"I'll look at the test file to understand what's failing. Let me read it first.",
+	"I found the issue. The test was comparing timestamps without accounting for timezone differences. I'll fix the assertion.",
+	"Let me check the current implementation to understand the error handling flow.",
+	"The error is caused by a nil pointer dereference when the user record doesn't exist. I'll add a nil check before accessing the field.",
+	"I've updated the code with proper error handling. Let me run the tests to verify.",
+	"All tests pass now. The fix involved adding a guard clause at the entry point of the handler.",
+	"Let me search for related files that might also need updating.",
+	"I'll implement this using an exponential backoff strategy with jitter. Let me start with the core retry logic.",
+}
+
+var toolInputs = map[string][]string{
+	"Bash":  {"go test ./...", "git status", "grep -rn 'TODO' .", "make build", "docker compose up -d"},
+	"Read":  {"src/auth/handler.go", "internal/db/pool.go", "Dockerfile", "config/settings.yaml", "main.go"},
+	"Edit":  {"src/auth/handler.go: fix nil check on line 42", "internal/api/users.go: add pagination params"},
+	"Write": {"src/auth/handler_test.go", "internal/retry/backoff.go"},
+	"Grep":  {"pattern: 'func.*Handler' in src/", "pattern: 'TODO|FIXME' in .", "pattern: 'error' in internal/"},
+	"Glob":  {"**/*_test.go", "src/**/*.go", "internal/**/*.go"},
+}
+
+var toolOutputs = map[string][]string{
+	"Bash": {
+		"PASS\nok  \tgithub.com/example/project/auth\t0.023s",
+		"On branch main\nChanges not staged for commit:\n  modified:   src/auth/handler.go",
+		"src/api/server.go:15: // TODO: add rate limiting\nsrc/db/pool.go:42: // TODO: implement connection retry",
+		"Build successful",
+		"Container project-db-1  Started\nContainer project-api-1  Started",
+	},
+	"Read": {
+		"package auth\n\nfunc HandleLogin(w http.ResponseWriter, r *http.Request) {\n\tuser := getUserFromContext(r)\n\tif user == nil {\n\t\thttp.Error(w, \"unauthorized\", 401)\n\t\treturn\n\t}\n\t// ... rest of handler\n}",
+		"package db\n\ntype Pool struct {\n\tconns []*sql.DB\n\tmax   int\n}\n\nfunc NewPool(dsn string, max int) (*Pool, error) {\n\t// ...\n}",
+	},
+	"Edit": {"Applied edit to src/auth/handler.go", "Applied edit to internal/api/users.go"},
+	"Write": {"Created src/auth/handler_test.go", "Created internal/retry/backoff.go"},
+	"Grep": {"Found 3 matches in 2 files", "Found 7 matches in 4 files"},
+	"Glob": {"Found 12 files matching pattern", "Found 8 files matching pattern"},
+}
 
 func main() {
 	endpoint := flag.String("endpoint", "http://localhost:4318", "OTLP HTTP endpoint")
@@ -95,6 +144,9 @@ func sendSession(endpoint, agent string) {
 			statusCode = tracepb.Status_STATUS_CODE_ERROR
 		}
 
+		prompt := userPrompts[randInt(len(userPrompts))]
+		response := assistantResponses[randInt(len(assistantResponses))]
+
 		spans = append(spans, &tracepb.Span{
 			TraceId:           traceID,
 			SpanId:            chatSpanID,
@@ -112,17 +164,38 @@ func sendSession(endpoint, agent string) {
 				strAttr("agent.name", agent),
 				strAttr("agent.session_id", sessionID),
 			},
+			Events: []*tracepb.Span_Event{
+				{
+					Name:         "gen_ai.content.prompt",
+					TimeUnixNano: uint64(chatStart.UnixNano()),
+					Attributes: []*commonpb.KeyValue{
+						strAttr("gen_ai.prompt", prompt),
+					},
+				},
+				{
+					Name:         "gen_ai.content.completion",
+					TimeUnixNano: uint64(chatEnd.UnixNano()),
+					Attributes: []*commonpb.KeyValue{
+						strAttr("gen_ai.completion", response),
+					},
+				},
+			},
 		})
 		cursor = chatEnd.Add(500 * time.Millisecond)
 
 		// Tool calls after chat
 		numTools := randInt(3)
 		for k := 0; k < numTools; k++ {
-			tool := tools[randInt(len(tools))]
+			tool := toolNames[randInt(len(toolNames))]
 			toolSpanID := randomBytes(8)
 			toolDur := time.Duration(randInt(5000)+100) * time.Millisecond
 			toolStart := cursor
 			toolEnd := toolStart.Add(toolDur)
+
+			inputs := toolInputs[tool]
+			outputs := toolOutputs[tool]
+			toolInput := inputs[randInt(len(inputs))]
+			toolOutput := outputs[randInt(len(outputs))]
 
 			spans = append(spans, &tracepb.Span{
 				TraceId:           traceID,
@@ -138,6 +211,22 @@ func sendSession(endpoint, agent string) {
 					strAttr("gen_ai.tool.call_id", fmt.Sprintf("call_%s", randomHex(6))),
 					strAttr("agent.name", agent),
 					strAttr("agent.session_id", sessionID),
+				},
+				Events: []*tracepb.Span_Event{
+					{
+						Name:         "gen_ai.tool.input",
+						TimeUnixNano: uint64(toolStart.UnixNano()),
+						Attributes: []*commonpb.KeyValue{
+							strAttr("gen_ai.tool.input", toolInput),
+						},
+					},
+					{
+						Name:         "gen_ai.tool.output",
+						TimeUnixNano: uint64(toolEnd.UnixNano()),
+						Attributes: []*commonpb.KeyValue{
+							strAttr("gen_ai.tool.output", toolOutput),
+						},
+					},
 				},
 			})
 			cursor = toolEnd.Add(100 * time.Millisecond)

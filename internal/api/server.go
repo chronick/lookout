@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/chronick/lookout-go/internal/store"
+	"github.com/chronick/lookout-go/internal/web"
 )
 
 // Server is the analytics HTTP API server.
@@ -63,6 +64,10 @@ func NewServer(addr string, s store.Store, ring *store.Ring) *Server {
 	// Live + Health
 	mux.HandleFunc("GET /v1/live", srv.handleWebSocket)
 	mux.HandleFunc("GET /health", srv.handleHealth)
+
+	// Web UI
+	webHandler := web.NewHandler(s, ring)
+	webHandler.Register(mux)
 
 	srv.server = &http.Server{
 		Addr:    addr,

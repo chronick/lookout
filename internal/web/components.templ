@@ -1,0 +1,170 @@
+package web
+
+import (
+	"encoding/json"
+	"fmt"
+	"time"
+
+	"github.com/chronick/lookout-go/internal/store"
+)
+
+templ statCard(label string, value string) {
+	<article class="stat-card">
+		<h3>{ value }</h3>
+		<small>{ label }</small>
+	</article>
+}
+
+templ statusBadge(code int) {
+	switch code {
+		case 0:
+			<span class="badge badge-unset">UNSET</span>
+		case 1:
+			<span class="badge badge-ok">OK</span>
+		default:
+			<span class="badge badge-error">ERROR</span>
+	}
+}
+
+templ anomalyBadge(anomaly string) {
+	if anomaly != "" {
+		<span class="badge badge-anomaly">{ anomaly }</span>
+	}
+}
+
+func formatDuration(startNano, endNano uint64) string {
+	if endNano <= startNano {
+		return "0ms"
+	}
+	d := time.Duration(endNano-startNano) * time.Nanosecond
+	if d < time.Millisecond {
+		return fmt.Sprintf("%.0fus", float64(d.Microseconds()))
+	}
+	if d < time.Second {
+		return fmt.Sprintf("%.0fms", float64(d.Milliseconds()))
+	}
+	return fmt.Sprintf("%.2fs", d.Seconds())
+}
+
+func formatCost(cost float64) string {
+	if cost == 0 {
+		return "-"
+	}
+	return fmt.Sprintf("$%.4f", cost)
+}
+
+func formatTokens(input, output int64) string {
+	if input == 0 && output == 0 {
+		return "-"
+	}
+	return fmt.Sprintf("%d / %d", input, output)
+}
+
+func formatTime(t time.Time) string {
+	if t.IsZero() {
+		return "-"
+	}
+	return t.Format("15:04:05")
+}
+
+func formatDateTime(t time.Time) string {
+	if t.IsZero() {
+		return "-"
+	}
+	return t.Format("Jan 02 15:04:05")
+}
+
+func formatNanoTime(nanos uint64) string {
+	t := time.Unix(0, int64(nanos))
+	return t.Format("15:04:05.000")
+}
+
+func formatNanoDate(nanos uint64) string {
+	t := time.Unix(0, int64(nanos))
+	return t.Format("Jan 02")
+}
+
+func formatNanoDateTime(nanos uint64) string {
+	t := time.Unix(0, int64(nanos))
+	return t.Format("Jan 02 15:04:05")
+}
+
+func toolName(s store.SpanRecord) string {
+	var attrs map[string]any
+	if err := json.Unmarshal([]byte(s.AttributesJSON), &attrs); err != nil {
+		return ""
+	}
+	if v, ok := attrs["gen_ai.tool.name"]; ok {
+		if name, ok := v.(string); ok {
+			return name
+		}
+	}
+	return ""
+}
+
+func shortID(id string) string {
+	if len(id) > 12 {
+		return id[:12]
+	}
+	return id
+}
+
+func formatCount(n int64) string {
+	if n >= 1_000_000 {
+		return fmt.Sprintf("%.1fM", float64(n)/1_000_000)
+	}
+	if n >= 1_000 {
+		return fmt.Sprintf("%.1fK", float64(n)/1_000)
+	}
+	return fmt.Sprintf("%d", n)
+}
+
+templ spanTable(spans []store.SpanRecord, showTrace bool) {
+	<figure>
+		<table>
+			<thead>
+				<tr>
+					if showTrace {
+						<th>Trace</th>
+					}
+					<th>Name</th>
+					<th>Model</th>
+					<th>Duration</th>
+					<th>Tokens (in/out)</th>
+					<th>Cost</th>
+					<th>Status</th>
+					<th>Anomaly</th>
+					<th>Time</th>
+				</tr>
+			</thead>
+			<tbody>
+				if len(spans) == 0 {
+					<tr>
+						<td colspan="9"><em>No spans found</em></td>
+					</tr>
+				}
+				for _, s := range spans {
+					<tr>
+						if showTrace {
+							<td class="mono">
+								<a href={ templ.SafeURL("/traces/" + s.TraceID) }>{ shortID(s.TraceID) }</a>
+							</td>
+						}
+						<td class="truncate">{ s.Name }</td>
+						<td>{ s.AIModel }</td>
+						<td>{ formatDuration(s.StartTimeUnixNano, s.EndTimeUnixNano) }</td>
+						<td>{ formatTokens(s.AIInputTokens, s.AIOutputTokens) }</td>
+						<td class="cost">{ formatCost(s.CostUSD) }</td>
+						<td>
+							@statusBadge(s.StatusCode)
+						</td>
+						<td>
+							@anomalyBadge(s.Anomaly)
+						</td>
+						<td class="mono">{ formatNanoTime(s.StartTimeUnixNano) }</td>
+					</tr>
+				}
+			</tbody>
+		</table>
+	</figure>
+}

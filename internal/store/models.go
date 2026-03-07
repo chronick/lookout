@@ -1,6 +1,9 @@
 package store
 
-import "time"
+import (
+	"encoding/json"
+	"time"
+)
 
 // SpanRecord is the flattened representation of an OTLP span stored in SQLite.
 type SpanRecord struct {
@@ -27,12 +30,32 @@ type SpanRecord struct {
 	AgentTaskID    string `json:"agent_task_id,omitempty"`
 	AgentSessionID string `json:"agent_session_id,omitempty"`
 
+	// Span events (prompts, completions, tool messages)
+	EventsJSON string `json:"events_json,omitempty"`
+
 	// Enrichment (computed on ingest)
 	CostUSD     float64  `json:"cost_usd,omitempty"`
 	TokensPerSec float64 `json:"tokens_per_sec,omitempty"`
 	Anomaly     string   `json:"anomaly,omitempty"`
 
 	InsertedAt time.Time `json:"inserted_at"`
+}
+
+// SpanEvent represents a parsed span event.
+type SpanEvent struct {
+	Name       string         `json:"name"`
+	TimeNano   uint64         `json:"time_unix_nano,omitempty"`
+	Attributes map[string]any `json:"attributes,omitempty"`
+}
+
+// ParsedEvents returns the span events parsed from EventsJSON.
+func (s *SpanRecord) ParsedEvents() []SpanEvent {
+	if s.EventsJSON == "" || s.EventsJSON == "[]" {
+		return nil
+	}
+	var events []SpanEvent
+	json.Unmarshal([]byte(s.EventsJSON), &events)
+	return events
 }
 
 // DurationSeconds returns the span duration in seconds.

@@ -1,0 +1,115 @@
+package web
+
+import (
+	"fmt"
+
+	"github.com/chronick/lookout-go/internal/store"
+)
+
+type DashboardData struct {
+	Stats       *store.Stats
+	ModelStats  []store.ModelStats
+	AgentStats  []store.AgentStats
+	RecentSpans []store.SpanRecord
+}
+
+templ dashboardPage(data DashboardData) {
+	@layout("Dashboard", "dashboard") {
+		<hgroup>
+			<h2>Dashboard</h2>
+			<p>Overview of collected traces and AI metrics</p>
+		</hgroup>
+		<div hx-get="/partials/stats" hx-trigger="every 10s" hx-swap="innerHTML">
+			@statsCards(data.Stats)
+		</div>
+		<div class="grid">
+			<div>
+				<h3>By Model</h3>
+				@modelStatsTable(data.ModelStats)
+			</div>
+			<div>
+				<h3>By Agent</h3>
+				@agentStatsTable(data.AgentStats)
+			</div>
+		</div>
+		<h3>Recent Spans</h3>
+		<div hx-get="/partials/recent" hx-trigger="every 5s" hx-swap="innerHTML">
+			@spanTable(data.RecentSpans, true)
+		</div>
+	}
+}
+
+templ statsCards(stats *store.Stats) {
+	<div class="stats-grid">
+		@statCard("Total Spans", formatCount(stats.TotalSpans))
+		@statCard("Total Traces", formatCount(stats.TotalTraces))
+		@statCard("Sessions", formatCount(stats.TotalSessions))
+		@statCard("AI Spans", formatCount(stats.AISpanCount))
+		@statCard("Total Cost", fmt.Sprintf("$%.2f", stats.TotalCost))
+		@statCard("Errors", formatCount(stats.ErrorCount))
+	</div>
+}
+
+templ modelStatsTable(models []store.ModelStats) {
+	<figure>
+		<table>
+			<thead>
+				<tr>
+					<th>Model</th>
+					<th>Spans</th>
+					<th>Tokens (in/out)</th>
+					<th>Cost</th>
+					<th>Avg Dur</th>
+					<th>Errors</th>
+				</tr>
+			</thead>
+			<tbody>
+				if len(models) == 0 {
+					<tr><td colspan="6"><em>No model data</em></td></tr>
+				}
+				for _, m := range models {
+					<tr>
+						<td>{ m.Model }</td>
+						<td>{ formatCount(m.SpanCount) }</td>
+						<td>{ formatTokens(m.InputTokens, m.OutputTokens) }</td>
+						<td class="cost">{ formatCost(m.TotalCost) }</td>
+						<td>{ fmt.Sprintf("%.0fms", m.AvgDurationMs) }</td>
+						<td>{ formatCount(m.ErrorCount) }</td>
+					</tr>
+				}
+			</tbody>
+		</table>
+	</figure>
+}
+
+templ agentStatsTable(agents []store.AgentStats) {
+	<figure>
+		<table>
+			<thead>
+				<tr>
+					<th>Agent</th>
+					<th>Spans</th>
+					<th>Sessions</th>
+					<th>Tokens (in/out)</th>
+					<th>Cost</th>
+					<th>Errors</th>
+				</tr>
+			</thead>
+			<tbody>
+				if len(agents) == 0 {
+					<tr><td colspan="6"><em>No agent data</em></td></tr>
+				}
+				for _, a := range agents {
+					<tr>
+						<td>{ a.Agent }</td>
+						<td>{ formatCount(a.SpanCount) }</td>
+						<td>{ formatCount(a.SessionCount) }</td>
+						<td>{ formatTokens(a.InputTokens, a.OutputTokens) }</td>
+						<td class="cost">{ formatCost(a.TotalCost) }</td>
+						<td>{ formatCount(a.ErrorCount) }</td>
+					</tr>
+				}
+			</tbody>
+		</table>
+	</figure>
+}

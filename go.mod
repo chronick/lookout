@@ -10,6 +10,7 @@ require (
 )
 
 require (
+	github.com/a-h/templ v0.3.1001 // indirect
 	github.com/dustin/go-humanize v1.0.1 // indirect
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/grpc-ecosystem/grpc-gateway/v2 v2.27.2 // indirect

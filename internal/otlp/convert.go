@@ -44,6 +44,9 @@ func ConvertTraceRequest(resourceSpans []*tracepb.ResourceSpans) []store.SpanRec
 					extractSemanticAttrs(&rec, rs.GetResource().GetAttributes())
 				}
 
+				// Capture span events (prompts, completions, tool messages)
+				rec.EventsJSON = marshalEvents(span.GetEvents())
+
 				spans = append(spans, rec)
 			}
 		}
@@ -92,6 +95,33 @@ func marshalKVList(attrs []*commonpb.KeyValue) string {
 		m[kv.GetKey()] = kvToValue(kv.GetValue())
 	}
 	b, _ := json.Marshal(m)
+	return string(b)
+}
+
+func marshalEvents(events []*tracepb.Span_Event) string {
+	if len(events) == 0 {
+		return "[]"
+	}
+	type spanEvent struct {
+		Name       string         `json:"name"`
+		TimeNano   uint64         `json:"time_unix_nano,omitempty"`
+		Attributes map[string]any `json:"attributes,omitempty"`
+	}
+	out := make([]spanEvent, 0, len(events))
+	for _, e := range events {
+		se := spanEvent{
+			Name:     e.GetName(),
+			TimeNano: e.GetTimeUnixNano(),
+		}
+		if attrs := e.GetAttributes(); len(attrs) > 0 {
+			se.Attributes = make(map[string]any, len(attrs))
+			for _, kv := range attrs {
+				se.Attributes[kv.GetKey()] = kvToValue(kv.GetValue())
+			}
+		}
+		out = append(out, se)
+	}
+	b, _ := json.Marshal(out)
 	return string(b)
 }
 

@@ -1,0 +1,94 @@
+package web
+
+import (
+	"fmt"
+
+	"github.com/chronick/lookout-go/internal/store"
+)
+
+templ sessionsPage(sessions []store.Session) {
+	@layout("Sessions", "sessions") {
+		<hgroup>
+			<h2>Sessions</h2>
+			<p>Agent sessions grouped by session ID</p>
+		</hgroup>
+		<figure>
+			<table>
+				<thead>
+					<tr>
+						<th>Session</th>
+						<th>Agent</th>
+						<th>Spans</th>
+						<th>Traces</th>
+						<th>Tokens (in/out)</th>
+						<th>Cost</th>
+						<th>Errors</th>
+						<th>Start</th>
+						<th>End</th>
+					</tr>
+				</thead>
+				<tbody>
+					if len(sessions) == 0 {
+						<tr>
+							<td colspan="9"><em>No sessions found</em></td>
+						</tr>
+					}
+					for _, s := range sessions {
+						<tr>
+							<td class="mono">
+								<a href={ templ.SafeURL("/sessions/" + s.SessionID) }>{ shortID(s.SessionID) }</a>
+							</td>
+							<td>{ s.AgentName }</td>
+							<td>{ fmt.Sprintf("%d", s.SpanCount) }</td>
+							<td>{ fmt.Sprintf("%d", s.TraceCount) }</td>
+							<td>{ formatTokens(s.TotalInputTokens, s.TotalOutputTokens) }</td>
+							<td class="cost">{ formatCost(s.TotalCost) }</td>
+							<td>{ fmt.Sprintf("%d", s.ErrorCount) }</td>
+							<td class="mono">{ formatDateTime(s.StartTime) }</td>
+							<td class="mono">{ formatDateTime(s.EndTime) }</td>
+						</tr>
+					}
+				</tbody>
+			</table>
+		</figure>
+	}
+}
+
+templ sessionDetailPage(sessionID string, spans []store.SpanRecord) {
+	@layout("Session " + shortID(sessionID), "sessions") {
+		<hgroup>
+			<h2>Session Detail</h2>
+			<p class="mono">{ sessionID }</p>
+		</hgroup>
+		<p>
+			<a href="/sessions">&larr; Back to sessions</a>
+		</p>
+		if len(spans) > 0 {
+			@sessionSummary(spans)
+		}
+		<h3>Conversation</h3>
+		@conversationView(spans)
+		<h3>All Spans</h3>
+		@spanTable(spans, true)
+	}
+}
+
+templ sessionSummary(spans []store.SpanRecord) {
+	<div class="stats-grid">
+		@statCard("Spans", fmt.Sprintf("%d", len(spans)))
+		@statCard("Agent", sessionAgent(spans))
+		@statCard("Model", traceModel(spans))
+		@statCard("Duration", traceDuration(spans))
+		@statCard("Tokens", traceTokens(spans))
+		@statCard("Cost", traceCost(spans))
+	</div>
+}
+
+func sessionAgent(spans []store.SpanRecord) string {
+	for _, s := range spans {
+		if s.AgentName != "" {
+			return s.AgentName
+		}
+	}
+	return "-"
+}

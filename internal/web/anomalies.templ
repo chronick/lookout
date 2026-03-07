@@ -1,0 +1,17 @@
+package web
+
+import (
+	"github.com/chronick/lookout-go/internal/store"
+)
+
+templ anomaliesPage(spans []store.SpanRecord) {
+	@layout("Anomalies", "anomalies") {
+		<hgroup>
+			<h2>Anomalies</h2>
+			<p>Spans flagged with anomalous behavior</p>
+		</hgroup>
+		<div hx-get="/partials/anomalies" hx-trigger="every 10s" hx-swap="innerHTML">
+			@spanTable(spans, true)
+		</div>
+	}
+}
