@@ -8,6 +8,9 @@ import (
 	"net"
 	"net/http"
 
+	"strings"
+
+	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
 
 	"github.com/chronick/lookout/internal/ai"
@@ -72,9 +75,16 @@ func (r *HTTPReceiver) handleTraces(w http.ResponseWriter, req *http.Request) {
 	}
 
 	var pbReq collectorpb.ExportTraceServiceRequest
-	if err := proto.Unmarshal(body, &pbReq); err != nil {
-		http.Error(w, "unmarshal: "+err.Error(), http.StatusBadRequest)
-		return
+	if isJSON(req) {
+		if err := protojson.Unmarshal(body, &pbReq); err != nil {
+			http.Error(w, "unmarshal json: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+	} else {
+		if err := proto.Unmarshal(body, &pbReq); err != nil {
+			http.Error(w, "unmarshal: "+err.Error(), http.StatusBadRequest)
+			return
+		}
 	}
 
 	spans := ConvertTraceRequest(pbReq.GetResourceSpans())
@@ -101,12 +111,19 @@ func (r *HTTPReceiver) handleTraces(w http.ResponseWriter, req *http.Request) {
 		r.onSpans(spans)
 	}
 
-	// Return OTLP response
+	// Return OTLP response in matching format
 	resp := &collectorpb.ExportTraceServiceResponse{}
-	respBytes, _ := proto.Marshal(resp)
-	w.Header().Set("Content-Type", "application/x-protobuf")
-	w.WriteHeader(http.StatusOK)
-	w.Write(respBytes)
+	if isJSON(req) {
+		respBytes, _ := protojson.Marshal(resp)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		w.Write(respBytes)
+	} else {
+		respBytes, _ := proto.Marshal(resp)
+		w.Header().Set("Content-Type", "application/x-protobuf")
+		w.WriteHeader(http.StatusOK)
+		w.Write(respBytes)
+	}
 }
 
 func (r *HTTPReceiver) handleMetrics(w http.ResponseWriter, req *http.Request) {
@@ -117,9 +134,16 @@ func (r *HTTPReceiver) handleMetrics(w http.ResponseWriter, req *http.Request) {
 	}
 
 	var pbReq metricscollectorpb.ExportMetricsServiceRequest
-	if err := proto.Unmarshal(body, &pbReq); err != nil {
-		http.Error(w, "unmarshal: "+err.Error(), http.StatusBadRequest)
-		return
+	if isJSON(req) {
+		if err := protojson.Unmarshal(body, &pbReq); err != nil {
+			http.Error(w, "unmarshal json: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+	} else {
+		if err := proto.Unmarshal(body, &pbReq); err != nil {
+			http.Error(w, "unmarshal: "+err.Error(), http.StatusBadRequest)
+			return
+		}
 	}
 
 	rollups := ConvertMetricsRequest(pbReq.GetResourceMetrics())
@@ -131,8 +155,20 @@ func (r *HTTPReceiver) handleMetrics(w http.ResponseWriter, req *http.Request) {
 	}
 
 	resp := &metricscollectorpb.ExportMetricsServiceResponse{}
-	respBytes, _ := proto.Marshal(resp)
-	w.Header().Set("Content-Type", "application/x-protobuf")
-	w.WriteHeader(http.StatusOK)
-	w.Write(respBytes)
+	if isJSON(req) {
+		respBytes, _ := protojson.Marshal(resp)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		w.Write(respBytes)
+	} else {
+		respBytes, _ := proto.Marshal(resp)
+		w.Header().Set("Content-Type", "application/x-protobuf")
+		w.WriteHeader(http.StatusOK)
+		w.Write(respBytes)
+	}
+}
+
+func isJSON(req *http.Request) bool {
+	ct := req.Header.Get("Content-Type")
+	return strings.Contains(ct, "application/json")
 }
