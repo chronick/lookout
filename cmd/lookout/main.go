@@ -35,6 +35,8 @@ func main() {
 		cmdQuery(os.Args[2:])
 	case "mcp":
 		cmdMCP(os.Args[2:])
+	case "mcp-serve":
+		cmdMCPServe(os.Args[2:])
 	case "dash":
 		cmdDash(os.Args[2:])
 	case "help", "-h", "--help":
@@ -56,6 +58,7 @@ Commands:
   serve     Start the collector daemon
   query     Query spans, sessions, metrics, stats, anomalies
   mcp       Start MCP server (stdio)
+  mcp-serve Start MCP server (HTTP)
   dash      Launch TUI dashboard
 
 Run "lookout <command> --help" for details.`)
@@ -123,6 +126,30 @@ func cmdServe(args []string) {
 	otlpGRPC.Stop()
 	otlpHTTP.Stop(ctx)
 	apiServer.Stop(ctx)
+}
+
+
+func cmdMCPServe(args []string) {
+	cfg := config.Default()
+	cfg.ApplyEnv()
+
+	fs := flag.NewFlagSet("mcp-serve", flag.ExitOnError)
+	addr := fs.String("addr", ":4321", "MCP HTTP server address")
+	fs.StringVar(&cfg.DBPath, "db-path", cfg.DBPath, "SQLite database path")
+	fs.Parse(args)
+
+	sqlStore, err := store.NewSQLiteStore(cfg.DBPath)
+	if err != nil {
+		log.Fatalf("open store: %v", err)
+	}
+	defer sqlStore.Close()
+
+	mcpSrv := mcpsrv.NewServer(sqlStore)
+	httpSrv := server.NewStreamableHTTPServer(mcpSrv, server.WithStateLess(true))
+	log.Printf("MCP HTTP server listening on %s", *addr)
+	if err := httpSrv.Start(*addr); err != nil {
+		log.Fatalf("mcp-serve: %v", err)
+	}
 }
 
 func retentionLoop(s *store.SQLiteStore, retentionDays int) {
