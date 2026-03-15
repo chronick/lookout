@@ -74,6 +74,7 @@ func cmdServe(args []string) {
 	fs.StringVar(&cfg.APIAddr, "api-addr", cfg.APIAddr, "Analytics API address")
 	fs.StringVar(&cfg.DBPath, "db-path", cfg.DBPath, "SQLite database path")
 	fs.IntVar(&cfg.RingSize, "ring-size", cfg.RingSize, "Ring buffer capacity")
+	mcpAddr := fs.String("mcp-addr", ":4321", "MCP HTTP server address (empty to disable)")
 	fs.IntVar(&cfg.RetentionDays, "retention-days", cfg.RetentionDays, "Retention period in days")
 	fs.Parse(args)
 
@@ -108,6 +109,18 @@ func cmdServe(args []string) {
 	}
 	if err := apiServer.Start(); err != nil {
 		log.Fatalf("start api: %v", err)
+	}
+
+	// Start MCP HTTP server if address is set
+	if *mcpAddr != "" {
+		mcpSrv := mcpsrv.NewServer(sqlStore)
+		httpMCP := server.NewStreamableHTTPServer(mcpSrv, server.WithStateLess(true))
+		go func() {
+			log.Printf("MCP HTTP server listening on %s", *mcpAddr)
+			if err := httpMCP.Start(*mcpAddr); err != nil {
+				log.Printf("mcp-serve error: %v", err)
+			}
+		}()
 	}
 
 	log.Printf("lookout running — OTLP gRPC %s, OTLP HTTP %s, API %s, DB %s", cfg.GRPCAddr, cfg.HTTPAddr, cfg.APIAddr, cfg.DBPath)
