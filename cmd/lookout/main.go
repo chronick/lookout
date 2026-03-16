@@ -13,6 +13,7 @@ import (
 
 	"github.com/chronick/lookout/internal/api"
 	"github.com/chronick/lookout/internal/cli"
+	"github.com/chronick/lookout/internal/client"
 	"github.com/chronick/lookout/internal/config"
 	mcpsrv "github.com/chronick/lookout/internal/mcp"
 	"github.com/chronick/lookout/internal/otlp"
@@ -237,12 +238,18 @@ Subcommands:
 	subcmd := args[0]
 	subArgs := args[1:]
 
-	// Open read-only store
-	sqlStore, err := store.NewSQLiteStore(cfg.DBPath)
-	if err != nil {
-		log.Fatalf("open store: %v", err)
+	// Use API client if LOOKOUT_API_URL is set, otherwise open local SQLite
+	var s store.Store
+	if cfg.APIURL != "" {
+		s = client.New(cfg.APIURL)
+	} else {
+		sqlStore, err := store.NewSQLiteStore(cfg.DBPath)
+		if err != nil {
+			log.Fatalf("open store: %v", err)
+		}
+		defer sqlStore.Close()
+		s = sqlStore
 	}
-	defer sqlStore.Close()
 
 	ctx := context.Background()
 
@@ -262,7 +269,7 @@ Subcommands:
 		fs.IntVar(&a.Limit, "limit", 20, "Max results")
 		fs.StringVar(&a.Format, "format", "table", "Output format: table|json|csv")
 		fs.Parse(subArgs)
-		if err := cli.QueryTraces(ctx, sqlStore, a); err != nil {
+		if err := cli.QueryTraces(ctx, s, a); err != nil {
 			log.Fatal(err)
 		}
 
@@ -274,7 +281,7 @@ Subcommands:
 		fs.IntVar(&a.Limit, "limit", 20, "Max results")
 		fs.StringVar(&a.Format, "format", "table", "Output format: table|json|csv")
 		fs.Parse(subArgs)
-		if err := cli.QuerySessions(ctx, sqlStore, a); err != nil {
+		if err := cli.QuerySessions(ctx, s, a); err != nil {
 			log.Fatal(err)
 		}
 
@@ -291,7 +298,7 @@ Subcommands:
 			fmt.Fprintln(os.Stderr, "--name is required for metrics query")
 			os.Exit(1)
 		}
-		if err := cli.QueryMetrics(ctx, sqlStore, a); err != nil {
+		if err := cli.QueryMetrics(ctx, s, a); err != nil {
 			log.Fatal(err)
 		}
 
@@ -302,7 +309,7 @@ Subcommands:
 		fs.StringVar(&a.GroupBy, "group-by", "", "Group by: model|agent")
 		fs.StringVar(&a.Format, "format", "table", "Output format: table|json|csv")
 		fs.Parse(subArgs)
-		if err := cli.QueryStats(ctx, sqlStore, a); err != nil {
+		if err := cli.QueryStats(ctx, s, a); err != nil {
 			log.Fatal(err)
 		}
 
@@ -314,7 +321,7 @@ Subcommands:
 		fs.IntVar(&a.Limit, "limit", 20, "Max results")
 		fs.StringVar(&a.Format, "format", "table", "Output format: table|json|csv")
 		fs.Parse(subArgs)
-		if err := cli.QueryAnomalies(ctx, sqlStore, a); err != nil {
+		if err := cli.QueryAnomalies(ctx, s, a); err != nil {
 			log.Fatal(err)
 		}
 

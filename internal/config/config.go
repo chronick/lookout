@@ -15,6 +15,7 @@ type Config struct {
 	RetentionDays int
 	PushURL       string
 	PushInterval  int
+	APIURL        string // Remote API URL for CLI queries (e.g., http://host:4320)
 }
 
 func Default() Config {
@@ -61,5 +62,8 @@ func (c *Config) ApplyEnv() {
 		if n, err := strconv.Atoi(v); err == nil {
 			c.PushInterval = n
 		}
+	}
+	if v := os.Getenv("LOOKOUT_API_URL"); v != "" {
+		c.APIURL = v
 	}
 }
