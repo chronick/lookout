@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/chronick/lookout/internal/ai"
 	"github.com/chronick/lookout/internal/store"
 	"github.com/chronick/lookout/internal/web"
 )
@@ -42,6 +43,7 @@ func NewServer(addr string, s store.Store, ring *store.Ring) *Server {
 	// Traces
 	mux.HandleFunc("GET /v1/traces", srv.handleTraces)
 	mux.HandleFunc("GET /v1/traces/{traceID}", srv.handleTraceByID)
+	mux.HandleFunc("GET /v1/traces/{traceID}/conversation", srv.handleTraceConversation)
 	mux.HandleFunc("GET /v1/recent", srv.handleRecent)
 
 	// Sessions
@@ -129,6 +131,20 @@ func (s *Server) handleTraceByID(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, spans)
+}
+
+func (s *Server) handleTraceConversation(w http.ResponseWriter, r *http.Request) {
+	traceID := r.PathValue("traceID")
+	spans, err := s.store.GetTrace(r.Context(), traceID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	if len(spans) == 0 {
+		writeError(w, http.StatusNotFound, fmt.Errorf("trace %s not found", traceID))
+		return
+	}
+	writeJSON(w, ai.DecodeConversation(spans))
 }
 
 func (s *Server) handleRecent(w http.ResponseWriter, r *http.Request) {

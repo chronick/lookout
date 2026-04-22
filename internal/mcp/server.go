@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/chronick/lookout/internal/ai"
 	"github.com/chronick/lookout/internal/store"
 	gomcp "github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
@@ -70,6 +71,11 @@ func NewServer(s store.Store) *server.MCPServer {
 		gomcp.WithString("since", gomcp.Description("Time range start (default 1h)")),
 		gomcp.WithString("bucket", gomcp.Description("Bucket width: 1m, 1h, 1d (default 1m)")),
 	), h.queryMetrics)
+
+	srv.AddTool(gomcp.NewTool("get_trace_conversation",
+		gomcp.WithDescription("Return the structured conversation (chat messages, tool calls) for a specific trace ID. Uses the same decoder as the web UI."),
+		gomcp.WithString("trace_id", gomcp.Description("Trace ID"), gomcp.Required()),
+	), h.getTraceConversation)
 
 	// -- Analytical tools --
 	srv.AddTool(gomcp.NewTool("analyze_session",
@@ -227,6 +233,21 @@ func (h *handlers) queryMetrics(ctx context.Context, req gomcp.CallToolRequest) 
 		return gomcp.NewToolResultError(err.Error()), nil
 	}
 	return jsonResult(rollups)
+}
+
+func (h *handlers) getTraceConversation(ctx context.Context, req gomcp.CallToolRequest) (*gomcp.CallToolResult, error) {
+	traceID := req.GetString("trace_id", "")
+	if traceID == "" {
+		return gomcp.NewToolResultError("trace_id is required"), nil
+	}
+	spans, err := h.store.GetTrace(ctx, traceID)
+	if err != nil {
+		return gomcp.NewToolResultError(err.Error()), nil
+	}
+	if len(spans) == 0 {
+		return gomcp.NewToolResultError(fmt.Sprintf("trace %s not found", traceID)), nil
+	}
+	return jsonResult(ai.DecodeConversation(spans))
 }
 
 // -- Analytical tool handlers --
